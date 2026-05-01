@@ -1,4 +1,3 @@
-//new update logic
 import type { GameObject, Script } from "@shared/schema";
 
 export type Vec3 = { x: number; y: number; z: number };
@@ -69,8 +68,6 @@ export type RuntimeObject = {
   on: (event: ObjectEventName, fn: (...args: any[]) => void) => () => void;
   off: (event: ObjectEventName, fn: (...args: any[]) => void) => void;
   GetPropertyChangedSignal: (property: string) => EventsAPI;
-  _dirty: DirtyFlags;
-  _clearDirty: () => void;
 };
 
 export type InventoryItem = {
@@ -185,10 +182,10 @@ export class EventBus<T extends Record<string, any[]>> {
   emit<K extends keyof T>(event: K, args: T[K], onError?: (e: any, fn: Function) => void): void {
     const s = this.subs.get(event);
     if (!s) return;
-    s.forEach((fn) => {
+    for (const fn of s) {
       try { (fn as any)(...args); }
       catch (e) { onError?.(e, fn); }
-    });
+    }
   }
   
   clear() { this.subs.clear(); }
@@ -443,6 +440,10 @@ export class GameRuntime {
   gui = new Map<string, GuiElement>();
   guiVersion = 0;
   runService!: RunServiceAPI;
+  
+  private _gravityCache = new Map<string, Vec3>();
+  private _rebuildScheduled = false;
+  private _framesSinceLastRebuild = 0;
 
   constructor(snap: GameObject[], scripts: Script[], username: string, avatarColor: string) {
     const keys: Record<string, boolean> = {};
@@ -535,50 +536,48 @@ export class GameRuntime {
     const propertySignals = new Map<string, EventBus<any>>();
     const objectEventBus = new EventBus<Record<ObjectEventName, any[]>>();
     const dirty: DirtyFlags = {};
+    const values: any = { ...ro };
+    const highFreqProps = new Set(['velocity', 'position', 'rotation']);
     
-    const proxy = new Proxy(ro, {
-      set: (target, prop, value) => {
-        const propName = prop as string;
-        const oldValue = (target as any)[propName];
-        
-        if (oldValue === value) return true;
-        
-        if (propName === 'position' || propName === 'rotation' || propName === 'scale') {
-          dirty.transform = true;
-        } else if (propName === 'color' || propName === 'transparency' || propName === 'visible') {
-          dirty.appearance = true;
-        } else if (propName === 'anchored' || propName === 'canCollide' || propName === 'mass' || propName === 'friction' || propName === 'velocity') {
-          dirty.physics = true;
-        } else if (propName === 'gravityEnabled' || propName === 'gravityStrength' || propName === 'gravityRadius') {
-          dirty.gravity = true;
-        } else {
-          dirty.meta = true;
-        }
-        
-        (target as any)[propName] = value;
-        
-        const signal = propertySignals.get(propName);
-        if (signal) {
-          signal.emit("changed", [value, oldValue]);
-        }
-        
-        objectEventBus.emit("changed", [propName, value, oldValue]);
-        
-        if ((this as any)._dirtyObjects) {
-          (this as any)._dirtyObjects.add(proxy as any);
-        }
-        
-        if (propName === 'container') {
-          (this as any).scheduleIndexRebuild?.();
-        }
-        
-        return true;
-      }
-    }) as RuntimeObject;
+    const reactive: any = {};
     
-    proxy.on = (event, fn) => objectEventBus.on(event as any, fn as any);
-    proxy.off = (event, fn) => objectEventBus.off(event as any, fn as any);
-    proxy.GetPropertyChangedSignal = (property: string) => {
+    for (const key of Object.keys(values)) {
+      Object.defineProperty(reactive, key, {
+        get: () => values[key],
+        set: (newVal) => {
+          const oldVal = values[key];
+          if (oldVal === newVal) return;
+          
+          if (!highFreqProps.has(key)) {
+            if (key === 'position' || key === 'rotation' || key === 'scale') {
+              dirty.transform = true;
+            } else if (key === 'color' || key === 'transparency' || key === 'visible') {
+              dirty.appearance = true;
+            } else if (key === 'anchored' || key === 'canCollide' || key === 'mass' || key === 'friction' || key === 'velocity') {
+              dirty.physics = true;
+            } else if (key === 'gravityEnabled' || key === 'gravityStrength' || key === 'gravityRadius') {
+              dirty.gravity = true;
+            } else {
+              dirty.meta = true;
+            }
+            
+            const signal = propertySignals.get(key);
+            if (signal) signal.emit("changed", [newVal, oldVal]);
+            objectEventBus.emit("changed", [key, newVal, oldVal]);
+            
+            this._dirtyObjects.add(reactive);
+          }
+          
+          values[key] = newVal;
+        },
+        enumerable: true,
+        configurable: true
+      });
+    }
+    
+    reactive.on = (event: ObjectEventName, fn: (...args: any[]) => void) => objectEventBus.on(event as any, fn as any);
+    reactive.off = (event: ObjectEventName, fn: (...args: any[]) => void) => objectEventBus.off(event as any, fn as any);
+    reactive.GetPropertyChangedSignal = (property: string) => {
       let bus = propertySignals.get(property);
       if (!bus) {
         bus = new EventBus();
@@ -589,16 +588,12 @@ export class GameRuntime {
         off: (event, fn) => bus!.off(event as any, fn as any),
       };
     };
-    proxy._dirty = dirty;
-    proxy._clearDirty = () => {
-      dirty.transform = false;
-      dirty.appearance = false;
-      dirty.physics = false;
-      dirty.gravity = false;
-      dirty.meta = false;
+    reactive._dirty = dirty;
+    reactive._clearDirty = () => {
+      dirty.transform = dirty.appearance = dirty.physics = dirty.gravity = dirty.meta = false;
     };
     
-    return proxy;
+    return reactive as RuntimeObject;
   }
 
   private normalizeContainer(raw: string | undefined | null): ContainerName {
@@ -823,30 +818,12 @@ export class GameRuntime {
   }
 
   private scheduleIndexRebuild() {
-    setTimeout(() => this.rebuildIndexes(), 0);
-  }
-
-  private runPickupSweep() {
-    const p = this.player;
-    const radius = 1.0;
-    let removed = false;
-    
-    for (const o of this.objectList) {
-      if (!o.isPickup) continue;
-      const dx = p.position.x - o.position.x;
-      const dy = p.position.y - o.position.y;
-      const dz = p.position.z - o.position.z;
-      if (Math.hypot(dx, dy, dz) > radius) continue;
-      const name: string = o.pickupName ?? o.name;
-      const data: Record<string, any> = o.pickupData ?? {};
-      const slot = p.inventory.add(name, { template: o.name, data });
-      if (slot) {
-        this.pushLog(`Picked up ${name}.`);
-        this.removeObject(o.id);
-        removed = true;
-      }
-    }
-    if (removed) this.rebuildIndexes();
+    if (this._rebuildScheduled) return;
+    this._rebuildScheduled = true;
+    setTimeout(() => {
+      this.rebuildIndexes();
+      this._rebuildScheduled = false;
+    }, 0);
   }
 
   private rebuildIndexes() {
@@ -1251,14 +1228,16 @@ export class GameRuntime {
   step(dt: number) {
     if (dt > 0.1) dt = 0.1;
     this.time += dt;
+    this._gravityCache.clear();
+    
     const p = this.player;
     
-    const gravityVec = this.computeGravity(p.position);
+    // 1. Compute gravity for player (cached per frame)
+    const gravityVec = this.computeGravityCached(p.position, "player");
     const gMag = Math.hypot(gravityVec.x, gravityVec.y, gravityVec.z);
-    const desiredUp =
-      gMag > 0.001
-        ? { x: -gravityVec.x / gMag, y: -gravityVec.y / gMag, z: -gravityVec.z / gMag }
-        : { x: 0, y: 1, z: 0 };
+    const desiredUp = gMag > 0.001
+      ? { x: -gravityVec.x / gMag, y: -gravityVec.y / gMag, z: -gravityVec.z / gMag }
+      : { x: 0, y: 1, z: 0 };
     const slerpT = Math.min(1, dt * 6);
     p.up.x = p.up.x + (desiredUp.x - p.up.x) * slerpT;
     p.up.y = p.up.y + (desiredUp.y - p.up.y) * slerpT;
@@ -1266,6 +1245,7 @@ export class GameRuntime {
     const upLen = Math.hypot(p.up.x, p.up.y, p.up.z) || 1;
     p.up.x /= upLen; p.up.y /= upLen; p.up.z /= upLen;
     
+    // 2. Player movement input
     const cf = this.cameraForward;
     const cfDot = cf.x * p.up.x + cf.y * p.up.y + cf.z * p.up.z;
     let fx = cf.x - p.up.x * cfDot;
@@ -1315,25 +1295,34 @@ export class GameRuntime {
       p.onGround = false;
     }
     
+    // 3. Apply gravity to player
     p.velocity.x += gravityVec.x * dt;
     p.velocity.y += gravityVec.y * dt;
     p.velocity.z += gravityVec.z * dt;
     
+    // 4. Integrate player position
     p.position.x += p.velocity.x * dt;
     p.position.y += p.velocity.y * dt;
     p.position.z += p.velocity.z * dt;
     
+    // 5. Physics for dynamic objects (batch updates, skip dirty for velocity)
     for (const o of this.objectList) {
       if (o.anchored || o.container !== "Workspace") continue;
-      const og = this.computeGravity(o.position, o.id);
-      o.velocity.x += og.x * dt;
-      o.velocity.y += og.y * dt;
-      o.velocity.z += og.z * dt;
-      o.position.x += o.velocity.x * dt;
-      o.position.y += o.velocity.y * dt;
-      o.position.z += o.velocity.z * dt;
+      const og = this.computeGravityCached(o.position, o.id);
+      // Direct value mutation to avoid dirty overhead during physics
+      const vel = o.velocity;
+      vel.x += og.x * dt;
+      vel.y += og.y * dt;
+      vel.z += og.z * dt;
+      const pos = o.position;
+      pos.x += vel.x * dt;
+      pos.y += vel.y * dt;
+      pos.z += vel.z * dt;
+      // Mark dirty after physics (only once per object)
+      this._dirtyObjects.add(o);
     }
     
+    // 6. Collision resolution (direct position adjustments)
     for (const o of this.objectList) {
       if (!o.visible || !o.canCollide) continue;
       if (o.type === "light" || o.type === "spawn") continue;
@@ -1341,8 +1330,65 @@ export class GameRuntime {
       this.resolvePlayerVsObject(o);
     }
     
-    this.runPickupSweep();
+    // 7. Pickup collection and touch events (single pass)
+    const playerRadius = 0.45;
+    const playerHeight = 0.95;
+    const seenThisFrame = new Set<string>();
     
+    for (const o of this.objectList) {
+      if (!o.visible || o.container !== "Workspace") continue;
+      if (o.type === "light" || o.type === "spawn") continue;
+      
+      // Touch detection
+      let touching = false;
+      if (o.primitiveType === "sphere") {
+        const r = Math.max(o.scale.x, o.scale.y, o.scale.z) * 0.5;
+        const dx = p.position.x - o.position.x;
+        const dy = p.position.y - o.position.y;
+        const dz = p.position.z - o.position.z;
+        touching = Math.hypot(dx, dy, dz) < r + playerRadius + 0.05;
+      } else {
+        const hx = (o.scale.x || 1) * 0.5 + playerRadius;
+        const hy = (o.scale.y || 1) * 0.5 + playerHeight;
+        const hz = (o.scale.z || 1) * 0.5 + playerRadius;
+        touching = Math.abs(p.position.x - o.position.x) < hx &&
+                   Math.abs(p.position.y - o.position.y) < hy &&
+                   Math.abs(p.position.z - o.position.z) < hz;
+      }
+      
+      if (touching) {
+        seenThisFrame.add(o.id);
+        if (!this._playerContacts.has(o.id)) {
+          this._playerContacts.add(o.id);
+          this.emitObjectEvent(o.id, "touched", [p, o]);
+        }
+      }
+      
+      // Pickup detection
+      if (o.isPickup) {
+        const dx = p.position.x - o.position.x;
+        const dy = p.position.y - o.position.y;
+        const dz = p.position.z - o.position.z;
+        if (Math.hypot(dx, dy, dz) < 1.0) {
+          const name = o.pickupName ?? o.name;
+          const data = o.pickupData ?? {};
+          const slot = p.inventory.add(name, { template: o.name, data });
+          if (slot) {
+            this.pushLog(`Picked up ${name}.`);
+            this.removeObject(o.id);
+          }
+        }
+      }
+    }
+    
+    // Untouched events
+    for (const id of this._playerContacts) {
+      if (seenThisFrame.has(id)) continue;
+      this._playerContacts.delete(id);
+      this.emitObjectEvent(id, "untouched", [p, this._all.get(id)]);
+    }
+    
+    // 8. Ground and world boundary
     if (p.position.y < 1) {
       p.position.y = 1;
       if (p.velocity.y < 0) p.velocity.y = 0;
@@ -1354,28 +1400,23 @@ export class GameRuntime {
       p.onGround = false;
     }
     
-    this.runTouchSweep();
+    // 9. Build API for current frame (time/dt update)
     this.buildApi(dt);
     
-    this._events.emit("stepped", [dt, this.time], (e, fn) =>
-      this.pushLog(`RunService.Stepped error: ${formatErr(e)} (${(fn as any).name || "anonymous"})`)
-    );
+    // 10. Fire engine events
+    this._events.emit("stepped", [dt, this.time]);
     
     for (const k in this.input.keys) {
       const isDown = !!this.input.keys[k];
       const wasDown = !!this._prevKeys[k];
       if (isDown && !wasDown) {
-        this._events.emit("keyDown", [k], (e, fn) =>
-          this.pushLog(`events.on("keyDown") error: ${formatErr(e)} (${(fn as any).name || "anonymous"})`)
-        );
+        this._events.emit("keyDown", [k]);
         const set = this._keyDownHandlers.get(k);
         if (set) for (const fn of set) {
           try { fn(); } catch (e: any) { this.pushLog(`keyboard.onPress("${k}") error: ${formatErr(e)}`); }
         }
       } else if (!isDown && wasDown) {
-        this._events.emit("keyUp", [k], (e, fn) =>
-          this.pushLog(`events.on("keyUp") error: ${formatErr(e)} (${(fn as any).name || "anonymous"})`)
-        );
+        this._events.emit("keyUp", [k]);
         const set = this._keyUpHandlers.get(k);
         if (set) for (const fn of set) {
           try { fn(); } catch (e: any) { this.pushLog(`keyboard.onRelease("${k}") error: ${formatErr(e)}`); }
@@ -1383,14 +1424,11 @@ export class GameRuntime {
       }
     }
     
-    this._events.emit("heartbeat", [dt, this.time], (e, fn) =>
-      this.pushLog(`RunService.Heartbeat error: ${formatErr(e)} (${(fn as any).name || "anonymous"})`)
-    );
-    this._events.emit("update", [dt, this.time], (e, fn) =>
-      this.pushLog(`events.on("update") error: ${formatErr(e)} (${(fn as any).name || "anonymous"})`)
-    );
-    this._events.emit("step", [dt, this.time], () => {});
+    this._events.emit("heartbeat", [dt, this.time]);
+    this._events.emit("update", [dt, this.time]);
+    this._events.emit("step", [dt, this.time]);
     
+    // 11. Timers
     for (let i = this._timers.length - 1; i >= 0; i--) {
       const t = this._timers[i];
       if (this.time < t.nextAt) continue;
@@ -1399,60 +1437,34 @@ export class GameRuntime {
       else t.nextAt = this.time + t.interval;
     }
     
+    // 12. Player death/respawn
     if (p.health <= 0 && (this as any)._lastHealth > 0) {
-      this._events.emit("playerDied", [p], () => {});
+      this._events.emit("playerDied", [p]);
       p.respawn();
-      this._events.emit("playerSpawned", [p], () => {});
+      this._events.emit("playerSpawned", [p]);
     }
     (this as any)._lastHealth = p.health;
     
+    // 13. Clear frame state
     this.input.jump = false;
     this._prevKeys = { ...this.input.keys };
     this.flushDirtyObjects();
+    
+    // 14. Periodic index rebuild (only when needed)
+    this._framesSinceLastRebuild++;
+    if (this._rebuildScheduled && this._framesSinceLastRebuild > 10) {
+      this.rebuildIndexes();
+      this._rebuildScheduled = false;
+      this._framesSinceLastRebuild = 0;
+    }
   }
 
-  private runTouchSweep() {
-    const p = this.player;
-    const pr = 0.45;
-    const ph = 0.95;
-    const seenThisFrame = new Set<string>();
-    
-    for (const o of this.objectList) {
-      if (!o.visible) continue;
-      if (o.type === "light" || o.type === "spawn") continue;
-      if (o.container !== "Workspace") continue;
-      
-      let touching = false;
-      if (o.primitiveType === "sphere") {
-        const r = Math.max(o.scale.x, o.scale.y, o.scale.z) * 0.5;
-        const dx = p.position.x - o.position.x;
-        const dy = p.position.y - o.position.y;
-        const dz = p.position.z - o.position.z;
-        touching = Math.hypot(dx, dy, dz) < r + pr + 0.05;
-      } else {
-        const hx = (o.scale.x || 1) * 0.5 + pr;
-        const hy = (o.scale.y || 1) * 0.5 + ph;
-        const hz = (o.scale.z || 1) * 0.5 + pr;
-        touching =
-          Math.abs(p.position.x - o.position.x) < hx &&
-          Math.abs(p.position.y - o.position.y) < hy &&
-          Math.abs(p.position.z - o.position.z) < hz;
-      }
-      
-      if (touching) {
-        seenThisFrame.add(o.id);
-        if (!this._playerContacts.has(o.id)) {
-          this._playerContacts.add(o.id);
-          this.emitObjectEvent(o.id, "touched", [p, o]);
-        }
-      }
-    }
-    
-    for (const id of this._playerContacts) {
-      if (seenThisFrame.has(id)) continue;
-      this._playerContacts.delete(id);
-      this.emitObjectEvent(id, "untouched", [p, this._all.get(id)]);
-    }
+  private computeGravityCached(point: Vec3, id: string): Vec3 {
+    const cached = this._gravityCache.get(id);
+    if (cached) return cached;
+    const result = this.computeGravity(point, id);
+    this._gravityCache.set(id, result);
+    return result;
   }
 
   private computeGravity(point: Vec3, excludeId?: string): Vec3 {
