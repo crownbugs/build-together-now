@@ -36,23 +36,34 @@ class PlayCanvasErrorBoundary extends Component<
 
 function Primitive({ obj, runtime }: { obj: RuntimeObject; runtime: GameRuntime }) {
   const ref = useRef<THREE.Object3D | null>(null);
+  const matRef = useRef<THREE.MeshStandardMaterial | null>(null);
+
+  // Drive transform + material from the runtime each frame. Mutating refs
+  // (instead of re-rendering on every prop change) is what keeps the canvas at
+  // 60fps even when scripts push hundreds of objects around.
   useFrame(() => {
     const current = ref.current;
     if (!current) return;
     current.position.set(obj.position.x, obj.position.y, obj.position.z);
     current.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z);
     current.scale.set(obj.scale.x, obj.scale.y, obj.scale.z);
+    const opacity = 1 - (obj.transparency ?? 0);
+    current.visible = obj.visible && opacity > 0.01;
+    const m = matRef.current;
+    if (m) {
+      m.color.set(obj.color);
+      m.transparent = (obj.transparency ?? 0) > 0;
+      m.opacity = opacity;
+    }
   });
-
-  if (!obj.visible) return null;
-  const opacity = 1 - (obj.transparency ?? 0);
-  if (opacity <= 0.01) return null;
-  const isTransparent = (obj.transparency ?? 0) > 0;
 
   if (obj.type === "light") {
     return (
-      <group position={position}>
-        <pointLight color={obj.color} intensity={1.2} distance={20} />
+      <group
+        ref={ref as any}
+        position={[obj.position.x, obj.position.y, obj.position.z]}
+      >
+        <pointLight color={obj.color} intensity={1.2} distance={20} castShadow />
       </group>
     );
   }
@@ -73,25 +84,31 @@ function Primitive({ obj, runtime }: { obj: RuntimeObject; runtime: GameRuntime 
       geometry = <boxGeometry args={[1, 1, 1]} />;
   }
 
-  // Forward 3D viewport clicks to the runtime so user scripts that registered
-  // `obj.on("clicked", ...)` or `mouse.onClick(...)` fire. stopPropagation
-  // ensures the deepest hit wins — only that mesh's id is delivered.
   const handleClick = (e: any) => {
     e.stopPropagation();
     runtime.emitClick(obj.id);
   };
 
+  const initialOpacity = 1 - (obj.transparency ?? 0);
+  const initialTransparent = (obj.transparency ?? 0) > 0;
+
   return (
     <mesh
-      position={position}
-      rotation={rotation}
-      scale={scale}
+      ref={ref as any}
+      position={[obj.position.x, obj.position.y, obj.position.z]}
+      rotation={[obj.rotation.x, obj.rotation.y, obj.rotation.z]}
+      scale={[obj.scale.x, obj.scale.y, obj.scale.z]}
       castShadow
       receiveShadow
       onClick={handleClick}
     >
       {geometry}
-      <meshStandardMaterial color={obj.color} transparent={isTransparent} opacity={opacity} />
+      <meshStandardMaterial
+        ref={matRef}
+        color={obj.color}
+        transparent={initialTransparent}
+        opacity={initialOpacity}
+      />
     </mesh>
   );
 }
