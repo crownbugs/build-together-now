@@ -696,7 +696,7 @@ export class GameRuntime {
   gui = new Map<string, GuiElement>();
   guiVersion = 0;
   /** Roblox-style RunService for binding to frame phases. */
-  runService: RunServiceAPI;
+  runService!: RunServiceAPI;
 
   constructor(snap: GameObject[], scripts: Script[], username: string, avatarColor: string) {
     const keys: Record<string, boolean> = {};
@@ -728,6 +728,7 @@ export class GameRuntime {
         velocity: { x: 0, y: 0, z: 0 },
         on: () => () => {},
         off: () => {},
+        GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
       };
       this.mountObjectEvents(ro);
       this._all.set(ro.id, ro);
@@ -916,16 +917,16 @@ export class GameRuntime {
     // Initialize RunService
     this.runService = {
       renderStepped: {
-        on: (event, fn) => this._events.on("renderStepped", fn),
-        off: (event, fn) => this._events.off("renderStepped", fn),
+        on: (_event, fn) => this._events.on("renderStepped" as any, fn as any),
+        off: (_event, fn) => this._events.off("renderStepped" as any, fn as any),
       },
       stepped: {
-        on: (event, fn) => this._events.on("stepped", fn),
-        off: (event, fn) => this._events.off("stepped", fn),
+        on: (_event, fn) => this._events.on("stepped" as any, fn as any),
+        off: (_event, fn) => this._events.off("stepped" as any, fn as any),
       },
       heartbeat: {
-        on: (event, fn) => this._events.on("heartbeat", fn),
-        off: (event, fn) => this._events.off("heartbeat", fn),
+        on: (_event, fn) => this._events.on("heartbeat" as any, fn as any),
+        off: (_event, fn) => this._events.off("heartbeat" as any, fn as any),
       },
     };
   }

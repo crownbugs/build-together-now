@@ -210,7 +210,7 @@ const PrimitiveMesh = forwardRef<THREE.Object3D, PrimitiveMeshProps>(function Pr
 
   if (obj.type === "light") {
     return (
-      <group ref={ref} position={position} onClick={(e) => { e.stopPropagation(); onClick(); }}>
+      <group ref={ref as any} position={position} onClick={(e) => { e.stopPropagation(); onClick(); }}>
         <pointLight color={color} intensity={1.2} distance={20} />
         <mesh>
           <sphereGeometry args={[0.2, 12, 12]} />
@@ -244,7 +244,7 @@ const PrimitiveMesh = forwardRef<THREE.Object3D, PrimitiveMeshProps>(function Pr
 
   return (
     <mesh
-      ref={ref}
+      ref={ref as any}
       position={position}
       rotation={rotation}
       scale={scale}
@@ -975,7 +975,7 @@ export default function EditorPage() {
             <div>
               <Label className="text-xs">Enabled</Label>
               <Switch
-                checked={selectedScript.enabled}
+                checked={!!selectedScript.enabled}
                 onCheckedChange={(v) => handleScriptFieldChange("enabled", v)}
                 data-testid="switch-script-enabled"
               />
