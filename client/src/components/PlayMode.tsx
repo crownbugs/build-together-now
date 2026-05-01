@@ -35,35 +35,18 @@ class PlayCanvasErrorBoundary extends Component<
 }
 
 function Primitive({ obj, runtime }: { obj: RuntimeObject; runtime: GameRuntime }) {
-  const ref = useRef<THREE.Object3D | null>(null);
-  const matRef = useRef<THREE.MeshStandardMaterial | null>(null);
-
-  // Drive transform + material from the runtime each frame. Mutating refs
-  // (instead of re-rendering on every prop change) is what keeps the canvas at
-  // 60fps even when scripts push hundreds of objects around.
-  useFrame(() => {
-    const current = ref.current;
-    if (!current) return;
-    current.position.set(obj.position.x, obj.position.y, obj.position.z);
-    current.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z);
-    current.scale.set(obj.scale.x, obj.scale.y, obj.scale.z);
-    const opacity = 1 - (obj.transparency ?? 0);
-    current.visible = obj.visible && opacity > 0.01;
-    const m = matRef.current;
-    if (m) {
-      m.color.set(obj.color);
-      m.transparent = (obj.transparency ?? 0) > 0;
-      m.opacity = opacity;
-    }
-  });
+  if (!obj.visible) return null;
+  const opacity = 1 - (obj.transparency ?? 0);
+  if (opacity <= 0.01) return null;
+  const isTransparent = (obj.transparency ?? 0) > 0;
+  const position: [number, number, number] = [obj.position.x, obj.position.y, obj.position.z];
+  const rotation: [number, number, number] = [obj.rotation.x, obj.rotation.y, obj.rotation.z];
+  const scale: [number, number, number] = [obj.scale.x, obj.scale.y, obj.scale.z];
 
   if (obj.type === "light") {
     return (
-      <group
-        ref={ref as any}
-        position={[obj.position.x, obj.position.y, obj.position.z]}
-      >
-        <pointLight color={obj.color} intensity={1.2} distance={20} castShadow />
+      <group position={position}>
+        <pointLight color={obj.color} intensity={1.2} distance={20} />
       </group>
     );
   }
@@ -84,48 +67,30 @@ function Primitive({ obj, runtime }: { obj: RuntimeObject; runtime: GameRuntime 
       geometry = <boxGeometry args={[1, 1, 1]} />;
   }
 
+  // Forward 3D viewport clicks to the runtime so user scripts that registered
+  // `obj.on("clicked", ...)` or `mouse.onClick(...)` fire. stopPropagation
+  // ensures the deepest hit wins — only that mesh's id is delivered.
   const handleClick = (e: any) => {
     e.stopPropagation();
     runtime.emitClick(obj.id);
   };
 
-  const initialOpacity = 1 - (obj.transparency ?? 0);
-  const initialTransparent = (obj.transparency ?? 0) > 0;
-
   return (
     <mesh
-      ref={ref as any}
-      position={[obj.position.x, obj.position.y, obj.position.z]}
-      rotation={[obj.rotation.x, obj.rotation.y, obj.rotation.z]}
-      scale={[obj.scale.x, obj.scale.y, obj.scale.z]}
+      position={position}
+      rotation={rotation}
+      scale={scale}
       castShadow
       receiveShadow
       onClick={handleClick}
     >
       {geometry}
-      <meshStandardMaterial
-        ref={matRef}
-        color={obj.color}
-        transparent={initialTransparent}
-        opacity={initialOpacity}
-      />
+      <meshStandardMaterial color={obj.color} transparent={isTransparent} opacity={opacity} />
     </mesh>
   );
 }
 
 function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRuntime }) {
-  const groupRef = useRef<THREE.Group | null>(null);
-  const bodyRef = useRef<THREE.Group | null>(null);
-
-  useFrame(() => {
-    const group = groupRef.current;
-    if (!group) return;
-    group.position.set(player.position.x, player.position.y, player.position.z);
-    const up = new THREE.Vector3(player.up.x, player.up.y, player.up.z).normalize();
-    group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
-    if (bodyRef.current) bodyRef.current.rotation.y = player.rotation.y;
-  });
-
   // Subtle arm/leg swing while moving.
   const moveAmount = Math.min(
     1,
@@ -165,7 +130,7 @@ function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRunti
         </mesh>
         <mesh position={[0, -0.55, 0]} castShadow>
           <sphereGeometry args={[0.11, 16, 16]} />
-          <meshStandardMaterial color={"#f5d0a9"} roughness={0.7} />
+          <meshStandardMaterial color={"#7a3e19"} roughness={0.7} />
         </mesh>
       </group>
       <group position={[-0.42, 0.18, 0]} rotation={[-swing, 0, -0.05]}>
@@ -175,7 +140,7 @@ function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRunti
         </mesh>
         <mesh position={[0, -0.55, 0]} castShadow>
           <sphereGeometry args={[0.11, 16, 16]} />
-          <meshStandardMaterial color={"#f5d0a9"} roughness={0.7} />
+          <meshStandardMaterial color={"#7a3e19"} roughness={0.7} />
         </mesh>
       </group>
 
@@ -196,29 +161,29 @@ function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRunti
       {/* Head */}
       <mesh position={[0, 0.7, 0]} castShadow>
         <sphereGeometry args={[0.3, 24, 24]} />
-        <meshStandardMaterial color={"#f5d0a9"} roughness={0.6} />
+        <meshStandardMaterial color={"#7a3e19"} roughness={0.6} />
       </mesh>
 
       {/* Hair cap */}
       <mesh position={[0, 0.86, -0.02]} castShadow>
         <sphereGeometry args={[0.31, 24, 24, 0, Math.PI * 2, 0, Math.PI / 2]} />
-        <meshStandardMaterial color="#3a2418" roughness={0.85} />
+        <meshStandardMaterial color="#000000" roughness={0.85} />
       </mesh>
 
       {/* Eyes */}
       <mesh position={[0.1, 0.72, 0.27]}>
         <sphereGeometry args={[0.045, 12, 12]} />
-        <meshBasicMaterial color="#0e1116" />
+        <meshBasicMaterial color="#0a0a0a" />
       </mesh>
       <mesh position={[-0.1, 0.72, 0.27]}>
         <sphereGeometry args={[0.045, 12, 12]} />
-        <meshBasicMaterial color="#0e1116" />
+        <meshBasicMaterial color="#0a0a0a" />
       </mesh>
 
       {/* Smile */}
       <mesh position={[0, 0.6, 0.28]} rotation={[0, 0, 0]}>
         <torusGeometry args={[0.07, 0.012, 8, 16, Math.PI]} />
-        <meshBasicMaterial color="#3b2218" />
+        <meshBasicMaterial color="#252525" />
       </mesh>
 
       {/* Username tag */}
@@ -372,13 +337,6 @@ function ChaseCameraRig({ runtime }: { runtime: GameRuntime }) {
 
 // (CameraReader removed — ChaseCameraRig now writes runtime.cameraForward directly.)
 
-function RenderSteppedEmitter({ runtime }: { runtime: GameRuntime }) {
-  useFrame((state, dt) => {
-    runtime.emitRenderStepped(dt);
-  });
-  return null;
-}
-
 function VirtualJoystick({
   onChange,
   side,
@@ -448,7 +406,7 @@ export default function PlayMode({
   objects: GameObject[];
   scripts: Script[];
   username: string;
-  onExit: (logs: string[]) => void;
+  onExit: () => void;
 }) {
   const runtime = useMemo(
     () => new GameRuntime(objects, scripts, username, "#3b82f6"),
@@ -464,16 +422,11 @@ export default function PlayMode({
     }),
     [objects]
   );
-  const [playerHealth, setPlayerHealth] = useState(runtime.player.health);
-  const [playerMaxHealth, setPlayerMaxHealth] = useState(runtime.player.maxHealth);
-  const [guiVersion, setGuiVersion] = useState(runtime.guiVersion);
+  const [tick, setTick] = useState(0);
   const [showConsole, setShowConsole] = useState(false);
   const [isMobile] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches
   );
-  const playerHealthRef = useRef(runtime.player.health);
-  const playerMaxHealthRef = useRef(runtime.player.maxHealth);
-  const guiVersionRef = useRef(runtime.guiVersion);
   const webglAvailable = useMemo(() => isWebGLAvailable(), []);
 
   // Keyboard input
@@ -519,18 +472,7 @@ export default function PlayMode({
       const dt = (now - last) / 1000;
       last = now;
       runtime.step(dt);
-      if (runtime.player.health !== playerHealthRef.current) {
-        playerHealthRef.current = runtime.player.health;
-        setPlayerHealth(runtime.player.health);
-      }
-      if (runtime.player.maxHealth !== playerMaxHealthRef.current) {
-        playerMaxHealthRef.current = runtime.player.maxHealth;
-        setPlayerMaxHealth(runtime.player.maxHealth);
-      }
-      if (runtime.guiVersion !== guiVersionRef.current) {
-        guiVersionRef.current = runtime.guiVersion;
-        setGuiVersion(runtime.guiVersion);
-      }
+      setTick((t) => (t + 1) % 1000000);
       raf = requestAnimationFrame(tickFn);
     };
     raf = requestAnimationFrame(tickFn);
@@ -582,7 +524,6 @@ export default function PlayMode({
 
           <Avatar player={runtime.player} runtime={runtime} />
           <ChaseCameraRig runtime={runtime} />
-          <RenderSteppedEmitter runtime={runtime} />
         </Canvas>
         </PlayCanvasErrorBoundary>
       ) : (
@@ -609,7 +550,7 @@ export default function PlayMode({
             <Terminal className="w-4 h-4" />
             <span className="ml-1 hidden sm:inline">Console</span>
           </Button>
-          <Button size="sm" variant="destructive" onClick={() => onExit([...runtime.logs])} data-testid="button-stop-play">
+          <Button size="sm" variant="destructive" onClick={onExit} data-testid="button-stop-play">
             <X className="w-4 h-4" />
             <span className="ml-1">Stop</span>
           </Button>
@@ -617,7 +558,7 @@ export default function PlayMode({
       </div>
 
       {/* Health bar — appears as soon as the player isn't at full health. */}
-      {playerHealth < playerMaxHealth && (
+      {runtime.player.health < runtime.player.maxHealth && (
         <div
           className="absolute top-12 left-3 z-10 pointer-events-none flex items-center gap-2 px-2 py-1 rounded-md bg-black/55 backdrop-blur"
           data-testid="hud-health"
@@ -627,18 +568,18 @@ export default function PlayMode({
             <div
               className="h-full bg-red-500 transition-[width] duration-150"
               style={{
-                width: `${Math.max(0, (playerHealth / playerMaxHealth) * 100)}%`,
+                width: `${Math.max(0, (runtime.player.health / runtime.player.maxHealth) * 100)}%`,
               }}
             />
           </div>
           <span className="text-[11px] text-white/80 tabular-nums">
-            {Math.round(playerHealth)}/{playerMaxHealth}
+            {Math.round(runtime.player.health)}/{runtime.player.maxHealth}
           </span>
         </div>
       )}
 
       {/* Script-driven HUD (game.gui.text / game.gui.button) */}
-      <GuiOverlay runtime={runtime} version={guiVersion} />
+      <GuiOverlay runtime={runtime} version={runtime.guiVersion} />
 
       {/* Help */}
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-black/40 backdrop-blur text-white/80 text-xs z-10 pointer-events-none hidden md:block">
