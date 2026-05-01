@@ -975,7 +975,7 @@ export default function EditorPage() {
             <div>
               <Label className="text-xs">Enabled</Label>
               <Switch
-                checked={selectedScript.enabled}
+                checked={!!selectedScript.enabled}
                 onCheckedChange={(v) => handleScriptFieldChange("enabled", v)}
                 data-testid="switch-script-enabled"
               />
