@@ -696,7 +696,7 @@ export class GameRuntime {
   gui = new Map<string, GuiElement>();
   guiVersion = 0;
   /** Roblox-style RunService for binding to frame phases. */
-  runService: RunServiceAPI;
+  runService!: RunServiceAPI;
 
   constructor(snap: GameObject[], scripts: Script[], username: string, avatarColor: string) {
     const keys: Record<string, boolean> = {};
