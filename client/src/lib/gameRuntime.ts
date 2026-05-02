@@ -1986,6 +1986,19 @@ await wait(2);   // pauses for 2 real seconds
 log("main");
 \`\`\`
 
+## Animation: \`tween\` (no per-frame code)
+Need a part to slide, fade, or grow? Don't write a heartbeat handler — let
+the engine animate it for you:
+
+\`\`\`js
+const door = workspace.Door;
+tween(door.position, { y: 5 }, 1.5, "easeOutQuad");   // open over 1.5s
+tween(door, { transparency: 1 }, 0.4, "linear", () => destroy(door));
+\`\`\`
+
+Easings: \`linear\`, \`easeInQuad\`, \`easeOutQuad\`, \`easeInOutQuad\`,
+\`easeInCubic\`, \`easeOutCubic\`, \`easeInOutCubic\`. Returns a cancel function.
+
 Everything in this guide is available as a **bare global** — just type
 \`player.health\`, not \`game.player.health\`. (You don't need to type \`game.\`
 at all; the parameter is there only if you prefer that style.)
