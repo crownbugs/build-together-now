@@ -406,7 +406,7 @@ export default function PlayMode({
   objects: GameObject[];
   scripts: Script[];
   username: string;
-  onExit: () => void;
+  onExit: (logs: string[]) => void;
 }) {
   const runtime = useMemo(
     () => new GameRuntime(objects, scripts, username, "#3b82f6"),
