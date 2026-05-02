@@ -1702,6 +1702,9 @@ export class GameRuntime {
       }
     }
 
+    // ─── Engine-managed animations (tweens) advance automatically ────────────
+    this._tweens.step(dt);
+
     // ─── Tick the engine "heartbeat" event (after physics, main game loop) ────
     this._events.emit("heartbeat", [dt, this.time], (e, fn) =>
       this.pushLog(`RunService.Heartbeat error: ${formatErr(e)} (${(fn as any).name || "anonymous"})`)
