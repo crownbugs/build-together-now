@@ -1544,6 +1544,7 @@ export class GameRuntime {
     this._keyUpHandlers.clear();
     this._mouseClickHandlers.clear();
     this._timers.length = 0;
+    this._tweens.clear();
   }
 
   step(dt: number) {
