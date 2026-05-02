@@ -1,4 +1,4 @@
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Grid, Html, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
@@ -13,26 +13,9 @@ import {
 import type { GameObject, Script } from "@shared/schema";
 import SVGScene from "@/components/SVGScene";
 import { isWebGLAvailable } from "@/lib/webgl";
-
-class PlayCanvasErrorBoundary extends Component<
-  { children: ReactNode; fallback: ReactNode },
-  { hasError: boolean }
-> {
-  constructor(props: any) {
-    super(props);
-    this.state = { hasError: false };
-  }
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-  componentDidCatch(err: Error) {
-    console.error("[PlayCanvas]", err);
-  }
-  render() {
-    if (this.state.hasError) return this.props.fallback;
-    return this.props.children;
-  }
-}
+import PlayCanvasErrorBoundary from "@/components/play/PlayCanvasErrorBoundary";
+import GuiOverlay from "@/components/play/GuiOverlay";
+import VirtualJoystick from "@/components/play/VirtualJoystick";
 
 function Primitive({ obj, runtime }: { obj: RuntimeObject; runtime: GameRuntime }) {
   if (!obj.visible) return null;
