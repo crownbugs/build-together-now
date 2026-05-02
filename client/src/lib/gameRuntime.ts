@@ -179,7 +179,7 @@ export type EngineEvents = {
   /** Update phase - game logic (default for most scripts) */
   update: [dt: number, time: number];
   
-  // Lifecycle events
+  // Lifecycle events (internal use only)
   start: [];
   stop: [];
   keyDown: [key: string];
@@ -190,12 +190,23 @@ export type EngineEvents = {
   playerDied: [player: RuntimePlayer];
 };
 
+/** Event channel - a simplified version for specific event types */
+export type EventChannel<T extends any[]> = {
+  /** Subscribe to this channel - automatically uses the channel's event name */
+  on: (fn: (...args: T) => void) => () => void;
+  /** Unsubscribe from this channel */
+  off: (fn: (...args: T) => void) => void;
+};
+
 export class EventBus<T extends Record<string, any[]>> {
   private subs = new Map<keyof T, Set<(...args: any[]) => void>>();
 
   on<K extends keyof T>(event: K, fn: (...args: T[K]) => void): () => void {
     let s = this.subs.get(event);
-    if (!s) { s = new Set(); this.subs.set(event, s); }
+    if (!s) { 
+      s = new Set(); 
+      this.subs.set(event, s); 
+    }
     s.add(fn as any);
     return () => this.off(event, fn);
   }
@@ -207,16 +218,39 @@ export class EventBus<T extends Record<string, any[]>> {
   emit<K extends keyof T>(event: K, args: T[K], onError?: (e: any, fn: Function) => void): void {
     const s = this.subs.get(event);
     if (!s) return;
-    s.forEach((fn) => {
-      try { (fn as any)(...args); }
-      catch (e) { onError?.(e, fn); }
-    });
+    
+    // Create a copy to avoid issues if handlers modify the set during iteration
+    const handlers = Array.from(s);
+    
+    for (const fn of handlers) {
+      try { 
+        (fn as any)(...args); 
+      } catch (e) { 
+        onError?.(e, fn); 
+      }
+    }
   }
 
-  clear() { this.subs.clear(); }
+  /** Create a simplified channel for a specific event key */
+  createChannel<K extends keyof T>(event: K): EventChannel<T[K]> {
+    const self = this;
+    return {
+      on(fn: (...args: T[K]) => void): () => void {
+        return self.on(event, fn);
+      },
+      off(fn: (...args: T[K]) => void): void {
+        self.off(event, fn);
+      }
+    };
+  }
+
+  clear() { 
+    this.subs.clear(); 
+  }
 }
 
-export type EventsAPI = {
+// Internal only - not exposed to scripts
+type EventsAPI = {
   on: <K extends keyof EngineEvents>(event: K, fn: (...args: EngineEvents[K]) => void) => () => void;
   off: <K extends keyof EngineEvents>(event: K, fn: (...args: EngineEvents[K]) => void) => void;
 };
@@ -238,20 +272,20 @@ export type WorldAPI = {
   onPlayerDied: (fn: (player: RuntimePlayer) => void) => () => void;
 };
 
-/** RunService - exposes each phase for scripts to hook into */
+/** RunService - clean API with simple .on(fn) for each phase */
 export type RunServiceAPI = {
-  /** Input phase event bus */
-  input: EventsAPI;
-  /** Animation phase event bus */
-  animation: EventsAPI;
-  /** Replication phase event bus */
-  replication: EventsAPI;
-  /** Physics phase event bus */
-  physics: EventsAPI;
-  /** Render phase event bus */
-  render: EventsAPI;
-  /** Update phase event bus (default for game logic) */
-  heartbeat: EventsAPI;
+  /** Input phase channel - fires every frame with (dt, time) */
+  input: EventChannel<[dt: number, time: number]>;
+  /** Animation phase channel - fires every frame with (dt, time) */
+  animation: EventChannel<[dt: number, time: number]>;
+  /** Replication phase channel - fires every frame with (dt, time) */
+  replication: EventChannel<[dt: number, time: number]>;
+  /** Physics phase channel - fires every frame with (dt, time) */
+  physics: EventChannel<[dt: number, time: number]>;
+  /** Render phase channel - fires every frame with (dt, time) */
+  render: EventChannel<[dt: number, time: number]>;
+  /** Update phase channel - fires every frame with (dt, time) */
+  update: EventChannel<[dt: number, time: number]>;
 };
 
 export type GameAPI = {
@@ -266,7 +300,6 @@ export type GameAPI = {
   input: RuntimeInput;
   physics: RuntimePhysics;
   state: RuntimeState;
-  events: EventsAPI;
   keyboard: KeyboardAPI;
   mouse: MouseAPI;
   world: WorldAPI;
@@ -336,11 +369,10 @@ export function compileScript(code: string, name: string): CompiledScript {
        const input = game.input;
        const physics = game.physics;
        const state = game.state;
-       const events = game.events;
+       const runService = game.runService;
        const keyboard = game.keyboard;
        const mouse = game.mouse;
        const world = game.world;
-       const runService = game.runService;
        const gui = game.gui;
        const log = game.log;
        const inventory = game.player ? game.player.inventory : undefined;
@@ -594,13 +626,14 @@ export class GameRuntime {
   }
 
   private initRunService() {
+    // Create clean channels for each phase using the EventBus's createChannel method
     this.runService = {
-      input: { on: (e, fn) => this._events.on("input" as any, fn as any), off: (e, fn) => this._events.off("input" as any, fn as any) },
-      animation: { on: (e, fn) => this._events.on("animation" as any, fn as any), off: (e, fn) => this._events.off("animation" as any, fn as any) },
-      replication: { on: (e, fn) => this._events.on("replication" as any, fn as any), off: (e, fn) => this._events.off("replication" as any, fn as any) },
-      physics: { on: (e, fn) => this._events.on("physics" as any, fn as any), off: (e, fn) => this._events.off("physics" as any, fn as any) },
-      render: { on: (e, fn) => this._events.on("render" as any, fn as any), off: (e, fn) => this._events.off("render" as any, fn as any) },
-      heartbeat: { on: (e, fn) => this._events.on("update" as any, fn as any), off: (e, fn) => this._events.off("update" as any, fn as any) },
+      input: this._events.createChannel("input"),
+      animation: this._events.createChannel("animation"),
+      replication: this._events.createChannel("replication"),
+      physics: this._events.createChannel("physics"),
+      render: this._events.createChannel("render"),
+      update: this._events.createChannel("update"),
     };
   }
 
@@ -853,7 +886,6 @@ export class GameRuntime {
     const guiText = (id: string, text: string, opts?: Partial<Omit<GuiElement, "id" | "kind" | "text">>) => { const prev = this.gui.get(id); const el: GuiElement = { id, kind: "text", text, x: opts?.x ?? prev?.x ?? 0, y: opts?.y ?? prev?.y ?? 0, anchor: opts?.anchor ?? prev?.anchor ?? "tl", color: opts?.color ?? prev?.color ?? "#ffffff", size: opts?.size ?? prev?.size ?? 16, bg: opts?.bg ?? prev?.bg }; this.gui.set(id, el); this.guiVersion++; };
     const guiButton = (id: string, text: string, opts: Partial<Omit<GuiElement, "id" | "kind" | "text">> | undefined, onClick?: (game: GameAPI) => void) => { const prev = this.gui.get(id); const el: GuiElement = { id, kind: "button", text, x: opts?.x ?? prev?.x ?? 16, y: opts?.y ?? prev?.y ?? 16, anchor: opts?.anchor ?? prev?.anchor ?? "tl", color: opts?.color ?? prev?.color ?? "#ffffff", size: opts?.size ?? prev?.size ?? 14, bg: opts?.bg ?? prev?.bg ?? "rgba(30,40,60,0.85)", onClick: onClick ?? prev?.onClick }; this.gui.set(id, el); this.guiVersion++; };
     const guiClear = (id?: string) => { if (id == null) this.gui.clear(); else this.gui.delete(id); this.guiVersion++; };
-    const eventsApi: EventsAPI = { on: (event, fn) => this._events.on(event, fn), off: (event, fn) => this._events.off(event, fn) };
     const keyboardApi: KeyboardAPI = { onPress: (key, fn) => { const k = key.toLowerCase(); let s = this._keyDownHandlers.get(k); if (!s) { s = new Set(); this._keyDownHandlers.set(k, s); } s.add(fn); return () => s!.delete(fn); }, onRelease: (key, fn) => { const k = key.toLowerCase(); let s = this._keyUpHandlers.get(k); if (!s) { s = new Set(); this._keyUpHandlers.set(k, s); } s.add(fn); return () => s!.delete(fn); }, isDown: (key) => !!this.input.keys[key.toLowerCase()] };
     const mouseApi: MouseAPI = { onClick: (fn) => { this._mouseClickHandlers.add(fn); return () => this._mouseClickHandlers.delete(fn); } };
     const worldApi: WorldAPI = { onObjectAdded: (fn) => this._events.on("objectAdded", fn), onObjectRemoved: (fn) => this._events.on("objectRemoved", fn), onPlayerSpawned: (fn) => this._events.on("playerSpawned", fn), onPlayerDied: (fn) => this._events.on("playerDied", fn) };
@@ -871,7 +903,44 @@ export class GameRuntime {
     const lerpFn = (a: number, b: number, t: number) => a + (b - a) * t;
     const clampFn = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
-    this._api = { objects: this.objects, workspace: this.workspace, lighting: this.lighting, replicatedStorage: this.replicatedStorage, serverScriptService: this.serverScriptService, starterPlayer: this.starterPlayer, players: this.players, player: this.player, input: this.input, physics: this.physics, state: this.buildState(), events: eventsApi, keyboard: keyboardApi, mouse: mouseApi, world: worldApi, runService: this.runService, time: this.time, dt, now, log, find, spawn, create, destroy, gui: { text: guiText, button: guiButton, clear: guiClear }, onKey, onUpdate: onUpdateFn, every, after, wait, tween: tweenFn, random, randInt, pick, dist, lerp: lerpFn, clamp: clampFn };
+    this._api = { 
+      objects: this.objects, 
+      workspace: this.workspace, 
+      lighting: this.lighting, 
+      replicatedStorage: this.replicatedStorage, 
+      serverScriptService: this.serverScriptService, 
+      starterPlayer: this.starterPlayer, 
+      players: this.players, 
+      player: this.player, 
+      input: this.input, 
+      physics: this.physics, 
+      state: this.buildState(), 
+      keyboard: keyboardApi, 
+      mouse: mouseApi, 
+      world: worldApi, 
+      runService: this.runService, 
+      time: this.time, 
+      dt, 
+      now, 
+      log, 
+      find, 
+      spawn, 
+      create, 
+      destroy, 
+      gui: { text: guiText, button: guiButton, clear: guiClear }, 
+      onKey, 
+      onUpdate: onUpdateFn, 
+      every, 
+      after, 
+      wait, 
+      tween: tweenFn, 
+      random, 
+      randInt, 
+      pick, 
+      dist, 
+      lerp: lerpFn, 
+      clamp: clampFn 
+    };
     return this._api;
   }
 
@@ -880,7 +949,7 @@ export class GameRuntime {
 
   private async runScripts() { const api = this.buildApi(0); for (const s of this.scripts) { if (s.error) { this.pushLog(`[${s.name}] compile error: ${s.error}`); continue; } if (!s.run) continue; try { const maybe = (s.run as any)(api); if (maybe && typeof maybe.then === "function") maybe.then(undefined, (e: any) => this.pushLog(`[${s.name}] runtime error: ${formatErr(e)}`)); } catch (e: any) { this.pushLog(`[${s.name}] runtime error: ${formatErr(e)}`); } } }
 
-  start() { void this.runScripts(); this._events.emit("start", [], (e, fn) => this.pushLog(`events.on("start") error: ${formatErr(e)}`)); this._events.emit("playerSpawned", [this.player], (e, fn) => this.pushLog(`events.on("playerSpawned") error: ${formatErr(e)}`)); }
+  start() { void this.runScripts(); this._events.emit("start", [], (e, fn) => this.pushLog(`internal start error: ${formatErr(e)}`)); this._events.emit("playerSpawned", [this.player], (e, fn) => this.pushLog(`internal playerSpawned error: ${formatErr(e)}`)); }
 
   stop() { this._events.emit("stop", [], () => {}); this._events.clear(); this._objectEvents.clear(); this._keyDownHandlers.clear(); this._keyUpHandlers.clear(); this._mouseClickHandlers.clear(); this._timers.length = 0; this._tweens.clear(); }
 
@@ -965,11 +1034,11 @@ export class GameRuntime {
       const isDown = !!this.input.keys[k];
       const wasDown = !!this._prevKeys[k];
       if (isDown && !wasDown) {
-        this._events.emit("keyDown", [k], (e, fn) => this.pushLog(`events.on("keyDown") error: ${formatErr(e)}`));
+        this._events.emit("keyDown", [k], (e, fn) => this.pushLog(`internal keyDown error: ${formatErr(e)}`));
         const set = this._keyDownHandlers.get(k);
         if (set) for (const fn of set) try { fn(); } catch (e: any) { this.pushLog(`keyboard.onPress("${k}") error: ${formatErr(e)}`); }
       } else if (!isDown && wasDown) {
-        this._events.emit("keyUp", [k], (e, fn) => this.pushLog(`events.on("keyUp") error: ${formatErr(e)}`));
+        this._events.emit("keyUp", [k], (e, fn) => this.pushLog(`internal keyUp error: ${formatErr(e)}`));
         const set = this._keyUpHandlers.get(k);
         if (set) for (const fn of set) try { fn(); } catch (e: any) { this.pushLog(`keyboard.onRelease("${k}") error: ${formatErr(e)}`); }
       }
@@ -1065,24 +1134,13 @@ export class GameRuntime {
     } else if (p.position.y > 1.001) p.onGround = false;
 
     this.runTouchSweep();
-    // ========== INPUT PHASE ==========
-    this._events.emit("input", [dt, this.time], (e, fn) => this.pushLog(`runService.input error: ${formatErr(e)}`));
-
-    // ========== ANIMATION PHASE ==========
-    this._tweens.step(dt);
-    this.updateAutoProperties(dt);
-    this._events.emit("animation", [dt, this.time], (e, fn) => this.pushLog(`runService.animation error: ${formatErr(e)}`));
-
-    // ========== REPLICATION PHASE ==========
-    this._events.emit("replication", [dt, this.time], (e, fn) => this.pushLog(`runService.replication error: ${formatErr(e)}`));
-
     this._events.emit("physics", [dt, this.time], (e, fn) => this.pushLog(`runService.physics error: ${formatErr(e)}`));
 
     // ========== RENDER PHASE ==========
     this._events.emit("render", [dt, this.time], (e, fn) => this.pushLog(`runService.render error: ${formatErr(e)}`));
 
     // ========== UPDATE PHASE ==========
-    this._events.emit("update", [dt, this.time], (e, fn) => this.pushLog(`events.on("update") error: ${formatErr(e)}`));
+    this._events.emit("update", [dt, this.time], (e, fn) => this.pushLog(`runService.update error: ${formatErr(e)}`));
 
     for (let i = this._timers.length - 1; i >= 0; i--) {
       const t = this._timers[i];
@@ -1164,138 +1222,66 @@ export class GameRuntime {
   }
 }
 
-export const DEFAULT_SCRIPT = `// Welcome! Your script runs ONCE when Play starts.
-// Auto-update properties mean less code - just set and forget!
+export const DEFAULT_SCRIPT = `// Welcome! Clean, consistent API - just .on(fn) for everything!
 
-// ========== AUTO-UPDATE EXAMPLES ==========
-// Create a spinning coin
+// ========== RUNSERVICE - SIMPLE .ON(FN) API ==========
+// Each phase runs automatically in the correct order:
+
+runService.input.on((dt) => {
+  // INPUT PHASE: Raw keyboard/mouse processing
+  // Happens first every frame
+});
+
+runService.animation.on((dt) => {
+  // ANIMATION PHASE: Tweens + auto-properties
+  // Handles autoRotate, autoBob, autoFollow, etc.
+});
+
+runService.replication.on((dt) => {
+  // REPLICATION PHASE: Network sync (future)
+});
+
+runService.physics.on((dt) => {
+  // PHYSICS PHASE: Gravity, movement, collisions
+  // Perfect for custom physics
+});
+
+runService.render.on((dt) => {
+  // RENDER PHASE: Camera, visual effects, smoothing
+});
+
+// UPDATE PHASE: Default for game logic
+runService.update.on((dt) => {
+  // Your game logic here: AI, scoring, spawning, timers
+  log("Game running at", (1/dt).toFixed(0), "fps");
+});
+
+// ========== AUTO-UPDATE PROPERTIES ==========
+// Set these and they update automatically every frame!
+
 const coin = create({
   primitiveType: "sphere",
   position: { x: 2, y: 2, z: 0 },
   color: "#ffd700"
 });
-coin.autoRotateY = 2;  // Spins automatically every frame!
+coin.autoRotateY = 2;  // Spins automatically!
 coin.autoBob = { amplitude: 0.3, speed: 2 };  // Bobs up and down!
 
-// Create a hovering enemy that follows the player
 const enemy = create({
   primitiveType: "cube",
   position: { x: 5, y: 1, z: 5 },
   color: "#ff4444"
 });
-enemy.autoFollow = { target: player, speed: 2, offset: { x: 0, y: 1, z: 0 } };
+enemy.autoFollow = { target: player, speed: 2 };  // Follows player!
 enemy.autoSpin = { y: 1.5 };  // Spins while following!
 
-// Create a moving platform
-const platform = create({
-  primitiveType: "cube",
-  position: { x: 0, y: 1, z: 0 },
-  scale: { x: 3, y: 0.2, z: 3 },
-  color: "#44ff44"
-});
-platform.autoMove = { direction: { x: 1, y: 0, z: 0 }, speed: 2 };
-platform.autoBob = { amplitude: 0.2, speed: 1.5 };
+// Player automatically faces movement direction
+player.autoFaceMovement = true;
 
-// ========== PLAYER AUTO-UPDATE ==========
-player.autoFaceMovement = true;  // Player automatically faces movement direction!
-
-// ========== GAME LOGIC (optional) ==========
-let score = 0;
-gui.text("score", "Score: 0", { anchor: "tl", x: 16, y: 16, size: 24 });
-
-// You can still use events.on("update") if needed
-events.on("update", (dt) => {
-  // Optional game logic here
-  if (dist(player, coin) < 1.5) {
-    score++;
-    gui.text("score", "Score: " + score);
-    coin.position = { x: random(-10, 10), y: 2, z: random(-10, 10) };
-  }
-});
-
-// Or use specific phases for fine control
-runService.physics.on("physics", (dt) => {
-  // Custom physics modifications (advanced)
-});
-
-log("Game ready! Auto-update properties are doing all the work!");`;
-
-export const SCRIPTING_DOCS = `# Scripting Guide - Auto-Updates Edition!
-
-## 🌟 Auto-Update Properties (No Code Needed!)
-
-Set these properties and they update EVERY FRAME automatically:
-
-### Objects:
-\`\`\`js
-const obj = create({ primitiveType: "cube" });
-
-// Auto-rotate (radians per second)
-obj.autoRotateY = 2;  // Spins 2 radians/sec
-
-// Auto-bob (up and down)
-obj.autoBob = { amplitude: 0.5, speed: 2 };
-
-// Auto-follow a target
-obj.autoFollow = { target: player, speed: 3, offset: { x: 0, y: 1, z: 0 } };
-
-// Auto-spin (full 3D rotation)
-obj.autoSpin = { x: 1, y: 2, z: 0.5 };
-
-// Auto-move in a direction
-obj.autoMove = { direction: { x: 1, y: 0, z: 0 }, speed: 2 };
-\`\`\`
-
-### Player:
-\`\`\`js
-player.autoFaceMovement = true;  // Auto-rotate to face movement direction!
-\`\`\`
-
-## 🎯 Engine Phases (Internal Order)
-
-The engine processes everything in this order every frame:
-
-1. **INPUT** - Keyboard, mouse, input buffering
-2. **ANIMATION** - Tweens + auto-properties (autoRotate, autoBob, etc.)
-3. **REPLICATION** - Network sync (future)
-4. **PHYSICS** - Gravity, movement, collisions, touch detection
-5. **RENDER** - Camera, visual smoothing
-6. **UPDATE** - Your custom game logic
-
-## 📝 Script Hooks (Optional)
-
-You can hook into any phase if needed:
-
-\`\`\`js
-// Default - most game logic
-events.on("update", (dt) => {
-  // AI, scoring, spawning, etc.
-});
-
-// Specific phases for advanced control
-runService.input.on("input", (dt) => {
-  // Custom input handling
-});
-
-runService.physics.on("physics", (dt) => {
-  // Custom physics modifications
-});
-
-runService.render.on("render", (dt) => {
-  // Camera effects, visual updates
-});
-\`\`\`
-
-## 🎮 Example: Falling Blocks (Simplified!)
-
-With auto-updates, your game becomes MUCH simpler:
-
-\`\`\`js
-// Create floor
+// ========== EXAMPLE: FALLING BLOCKS ==========
 const floor = create({ primitiveType: "plane", scale: { x: 40, z: 40 }, color: "#222" });
 floor.anchored = true;
 
-// Spawn falling blocks (they fall automatically via gravity!)
 function spawnBlock() {
   const block = create({
     primitiveType: "cube",
@@ -1310,24 +1296,117 @@ function spawnBlock() {
   });
 }
 
-// Timer (only game logic needed!)
 let timeLeft = 30;
-events.on("update", (dt) => {
+runService.update.on((dt) => {
   timeLeft -= dt;
   gui.text("timer", "Time: " + timeLeft.toFixed(1));
   if (timeLeft <= 0) log("You win!");
 });
 
-// Spawn blocks - everything else is automatic!
 every(0.8, () => spawnBlock());
+log("Game ready! Clean runService API, auto-updates, everything works!");
+`;
+
+export const SCRIPTING_DOCS = `# Scripting Guide - Clean API Edition!
+
+## 🎯 Clean, Consistent API
+
+Every RunService channel uses the same simple .on(fn) pattern:
+
+\`\`\`js
+runService.input.on((dt) => { /* input processing */ });
+runService.animation.on((dt) => { /* animations */ });
+runService.replication.on((dt) => { /* networking */ });
+runService.physics.on((dt) => { /* physics */ });
+runService.render.on((dt) => { /* rendering */ });
+runService.update.on((dt) => { /* game logic */ });
+\`\`\`
+
+No need to specify event names - each channel knows its own event type!
+
+## 📋 Engine Phases (Automatic Order)
+
+The engine processes everything in this exact order every frame:
+
+1. **INPUT** - Keyboard, mouse, input buffering
+2. **ANIMATION** - Tweens + auto-properties (autoRotate, autoBob, etc.)
+3. **REPLICATION** - Network sync (future multiplayer)
+4. **PHYSICS** - Gravity, movement, collisions, touch detection
+5. **RENDER** - Camera, visual smoothing, interpolation
+6. **UPDATE** - Your custom game logic
+
+## ⚡ Auto-Update Properties
+
+Set these properties and they update EVERY FRAME automatically - no code needed!
+
+\`\`\`js
+const obj = create({ primitiveType: "cube" });
+
+// Automatic rotation (radians per second)
+obj.autoRotateY = 2;
+
+// Automatic bobbing up and down
+obj.autoBob = { amplitude: 0.5, speed: 2 };
+
+// Automatic following of a target
+obj.autoFollow = { target: player, speed: 3 };
+
+// Automatic 3D spinning
+obj.autoSpin = { x: 1, y: 2, z: 0.5 };
+
+// Automatic movement in a direction
+obj.autoMove = { direction: { x: 1, y: 0, z: 0 }, speed: 2 };
+
+// Player automatically faces movement direction!
+player.autoFaceMovement = true;
+\`\`\`
+
+## 🎮 Complete Example
+
+\`\`\`js
+// Setup - runs once
+const floor = create({ primitiveType: "plane", scale: { x: 40, z: 40 } });
+floor.anchored = true;
+
+// Auto-rotating collectible
+const coin = create({ primitiveType: "sphere", position: { x: 2, y: 1, z: 0 }, color: "#ffd700" });
+coin.autoRotateY = 2;
+coin.autoBob = { amplitude: 0.3, speed: 2 };
+
+// Game logic (only what's unique to your game!)
+let score = 0;
+gui.text("score", "Score: 0");
+
+runService.update.on((dt) => {
+  if (dist(player, coin) < 1.5) {
+    score++;
+    gui.text("score", "Score: " + score);
+    coin.position = { x: random(-10, 10), y: 2, z: random(-10, 10) };
+  }
+});
+
+// Optional: custom physics
+runService.physics.on((dt) => {
+  // Custom gravity modifications, forces, etc.
+});
+
+log("Game ready! Everything else is automatic!");
 \`\`\`
 
 ## 🚀 Benefits
 
-- **Less code** - auto-update properties handle the repetitive stuff
+- **Less code** - auto-properties handle repetitive updates
+- **Clean API** - every phase uses the same \`.on(fn)\` pattern
 - **Better performance** - engine optimized internal phases
-- **Cleaner scripts** - focus on game logic, not boilerplate
+- **Predictable order** - phases always run in correct sequence
 - **Flexible** - hook into any phase when you need fine control
+
+## 📝 Notes
+
+- Each phase automatically receives (dt, time) parameters
+- Auto-properties run during the ANIMATION phase
+- The engine handles all physics and collisions automatically
+- Use \`runService.update.on(fn)\` for game logic (most common)
 
 Happy building! 🎉
 `;
