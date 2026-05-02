@@ -1389,6 +1389,23 @@ export class GameRuntime {
     const wait = (seconds: number) =>
       new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, seconds * 1000)));
     const now = () => this.time;
+    /**
+     * Animate numeric properties on any object/vector over `duration` seconds.
+     * The engine advances the tween every frame — script authors don't write
+     * per-frame interpolation code.
+     *
+     *   tween(part.position, { x: 10, y: 5 }, 2, "easeOutQuad");
+     *   tween(part, { transparency: 1 }, 0.5, "linear", () => destroy(part));
+     *
+     * Returns a cancel function. Pass an `onDone` callback as the 5th arg.
+     */
+    const tweenFn = (
+      target: any,
+      to: Record<string, any>,
+      duration: number,
+      easing: Easing = "linear",
+      onDone?: () => void
+    ) => this._tweens.start(target, to, duration, easing, onDone);
     const random = (min: number, max: number) => min + Math.random() * (max - min);
     const randInt = (min: number, max: number) =>
       Math.floor(min + Math.random() * (max - min + 1));
