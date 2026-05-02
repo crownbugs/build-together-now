@@ -1449,6 +1449,7 @@ export class GameRuntime {
       every,
       after,
       wait,
+      tween: tweenFn,
       random,
       randInt,
       pick,
