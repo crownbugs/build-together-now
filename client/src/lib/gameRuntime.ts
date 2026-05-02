@@ -666,6 +666,9 @@ export class GameRuntime {
   player: RuntimePlayer;
   private _prevKeys: Record<string, boolean> = {};
   private _timers: { fn: () => void; nextAt: number; interval: number; once: boolean }[] = [];
+  /** Tween manager — animates numeric properties over time so devs don't
+   *  have to write per-frame interpolation code (use `tween(part, ...)`). */
+  private _tweens = new TweenManager();
   private _keyDownHandlers = new Map<string, Set<() => void>>();
   private _keyUpHandlers = new Map<string, Set<() => void>>();
   /** Engine-wide event bus (update, keyDown, playerSpawned, ...). */
