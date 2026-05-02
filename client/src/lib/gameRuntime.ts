@@ -433,6 +433,23 @@ export type GameAPI = {
   after: (seconds: number, fn: () => void) => () => void;
   /** Pause for N seconds. Returns a Promise — usable with `await`. */
   wait: (seconds: number) => Promise<void>;
+  /**
+   * Animate numeric properties over time — the engine handles every frame
+   * for you, so you don't write per-frame interpolation code.
+   *
+   *   tween(part.position, { x: 10 }, 2);          // 2-second slide
+   *   tween(part, { transparency: 1 }, 0.5);       // 0.5s fade-out
+   *   tween(ui, { y: 100 }, 1, "easeOutCubic");    // ease the UI bar
+   *
+   * Returns a cancel function. Pass an `onDone` callback as the 5th arg.
+   */
+  tween: (
+    target: any,
+    to: Record<string, any>,
+    duration: number,
+    easing?: Easing,
+    onDone?: () => void
+  ) => () => void;
   /** Random float in [min, max). */
   random: (min: number, max: number) => number;
   /** Random integer in [min, max] (both inclusive). */
