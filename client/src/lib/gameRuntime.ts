@@ -1938,7 +1938,19 @@ log("game phase is now Playing");
 
 export const SCRIPTING_DOCS = `# Scripting Guide
 
-Your scripts run in **plain JavaScript** — there's no setup, no imports, no npm.
+## What the engine does for you (no code needed)
+- **Clock:** ticks ~60 FPS automatically.
+- **Physics:** gravity, velocity, jumping, ground-snap, collisions.
+- **Rendering:** draws every part from its current position/rotation/color/transparency.
+- **Input plumbing:** keyboard, mouse, mobile joystick all wired to \`player\`.
+- **Animations:** \`tween(...)\` advances every frame on its own.
+- **Timers:** \`every(...)\`, \`after(...)\`, \`wait(...)\` are managed for you.
+
+## What you write (the logic)
+Anything game-specific: rotating a part, sliding a UI bar, counting down a
+timer, scoring, win conditions, spawning enemies.
+
+Your scripts run in **plain JavaScript** — no setup, no imports, no npm.
 Your code runs **once** when Play starts, top to bottom. There is no
 \`onStart\` / \`onUpdate\` boilerplate. To do something every frame, listen for
 the \`heartbeat\` event. \`events.on("update", ...)\` still works as an alias:
