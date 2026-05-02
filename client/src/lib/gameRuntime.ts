@@ -521,6 +521,7 @@ export function compileScript(code: string, name: string): CompiledScript {
        const keyboard = game.keyboard;
        const mouse = game.mouse;
        const world = game.world;
+       const runService = game.runService;  // ← ADD THIS LINE
        const gui = game.gui;
        const log = game.log;
        const inventory = game.player ? game.player.inventory : undefined;
