@@ -1,4 +1,4 @@
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Grid, Html, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
@@ -13,26 +13,9 @@ import {
 import type { GameObject, Script } from "@shared/schema";
 import SVGScene from "@/components/SVGScene";
 import { isWebGLAvailable } from "@/lib/webgl";
-
-class PlayCanvasErrorBoundary extends Component<
-  { children: ReactNode; fallback: ReactNode },
-  { hasError: boolean }
-> {
-  constructor(props: any) {
-    super(props);
-    this.state = { hasError: false };
-  }
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-  componentDidCatch(err: Error) {
-    console.error("[PlayCanvas]", err);
-  }
-  render() {
-    if (this.state.hasError) return this.props.fallback;
-    return this.props.children;
-  }
-}
+import PlayCanvasErrorBoundary from "@/components/play/PlayCanvasErrorBoundary";
+import GuiOverlay from "@/components/play/GuiOverlay";
+import VirtualJoystick from "@/components/play/VirtualJoystick";
 
 function Primitive({ obj, runtime }: { obj: RuntimeObject; runtime: GameRuntime }) {
   if (!obj.visible) return null;
@@ -197,69 +180,7 @@ function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRunti
   );
 }
 
-/** HUD overlay that mirrors runtime.gui — text labels and clickable buttons added from scripts. */
-function GuiOverlay({ runtime, version: _v }: { runtime: GameRuntime; version: number }) {
-  const items = Array.from(runtime.gui.values());
-  if (items.length === 0) return null;
-  return (
-    <div className="absolute inset-0 z-20 pointer-events-none" data-testid="gui-overlay">
-      {items.map((el) => {
-        const style: React.CSSProperties = {
-          position: "absolute",
-          color: el.color,
-          fontSize: el.size,
-          background: el.bg,
-          padding: el.kind === "button" ? "8px 14px" : el.bg ? "4px 8px" : 0,
-          borderRadius: 6,
-          whiteSpace: "nowrap",
-          fontFamily: "Inter, system-ui, sans-serif",
-          fontWeight: 600,
-          textShadow: el.bg ? undefined : "0 1px 2px rgba(0,0,0,0.7)",
-          lineHeight: 1.2,
-        };
-        const transforms: string[] = [];
-        const v = el.anchor[0];
-        const h = el.anchor[1];
-        if (v === "t") style.top = el.y;
-        else if (v === "b") style.bottom = el.y;
-        else {
-          style.top = "50%";
-          transforms.push("translateY(-50%)");
-        }
-        if (h === "l") style.left = el.x;
-        else if (h === "r") style.right = el.x;
-        else {
-          style.left = "50%";
-          transforms.push("translateX(-50%)");
-        }
-        if (transforms.length) style.transform = transforms.join(" ");
-
-        if (el.kind === "button") {
-          return (
-            <button
-              key={el.id}
-              style={{
-                ...style,
-                cursor: "pointer",
-                pointerEvents: "auto",
-                border: "1px solid rgba(255,255,255,0.18)",
-              }}
-              onClick={() => runtime.invokeGuiClick(el.id)}
-              data-testid={`gui-button-${el.id}`}
-            >
-              {el.text}
-            </button>
-          );
-        }
-        return (
-          <div key={el.id} style={style} data-testid={`gui-text-${el.id}`}>
-            {el.text}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+// GuiOverlay moved to ./play/GuiOverlay.tsx
 
 function ChaseCameraRig({ runtime }: { runtime: GameRuntime }) {
   const { camera } = useThree();
@@ -337,65 +258,7 @@ function ChaseCameraRig({ runtime }: { runtime: GameRuntime }) {
 
 // (CameraReader removed — ChaseCameraRig now writes runtime.cameraForward directly.)
 
-function VirtualJoystick({
-  onChange,
-  side,
-}: {
-  onChange: (x: number, y: number) => void;
-  side: "left" | "right";
-}) {
-  const baseRef = useRef<HTMLDivElement>(null);
-  const [thumb, setThumb] = useState({ x: 0, y: 0 });
-  const activeId = useRef<number | null>(null);
-  const center = useRef({ x: 0, y: 0 });
-
-  const start = (e: React.PointerEvent) => {
-    const rect = baseRef.current!.getBoundingClientRect();
-    center.current = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    activeId.current = e.pointerId;
-    (e.target as Element).setPointerCapture(e.pointerId);
-    move(e);
-  };
-
-  const move = (e: React.PointerEvent) => {
-    if (activeId.current !== e.pointerId) return;
-    const dx = e.clientX - center.current.x;
-    const dy = e.clientY - center.current.y;
-    const max = 50;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    const clampX = (dist > max ? (dx / dist) * max : dx);
-    const clampY = (dist > max ? (dy / dist) * max : dy);
-    setThumb({ x: clampX, y: clampY });
-    onChange(clampX / max, clampY / max);
-  };
-
-  const end = (e: React.PointerEvent) => {
-    if (activeId.current !== e.pointerId) return;
-    activeId.current = null;
-    setThumb({ x: 0, y: 0 });
-    onChange(0, 0);
-  };
-
-  return (
-    <div
-      ref={baseRef}
-      onPointerDown={start}
-      onPointerMove={move}
-      onPointerUp={end}
-      onPointerCancel={end}
-      className={`absolute bottom-6 ${side === "left" ? "left-6" : "right-6"} w-28 h-28 rounded-full bg-black/30 border border-white/20 backdrop-blur-sm touch-none select-none z-20`}
-      data-testid={`joystick-${side}`}
-    >
-      <div
-        className="absolute w-12 h-12 rounded-full bg-white/70 border border-white/80"
-        style={{
-          left: `calc(50% - 1.5rem + ${thumb.x}px)`,
-          top: `calc(50% - 1.5rem + ${thumb.y}px)`,
-        }}
-      />
-    </div>
-  );
-}
+// VirtualJoystick moved to ./play/VirtualJoystick.tsx
 
 export default function PlayMode({
   objects,
@@ -406,7 +269,7 @@ export default function PlayMode({
   objects: GameObject[];
   scripts: Script[];
   username: string;
-  onExit: () => void;
+  onExit: (logs: string[]) => void;
 }) {
   const runtime = useMemo(
     () => new GameRuntime(objects, scripts, username, "#3b82f6"),
@@ -550,7 +413,7 @@ export default function PlayMode({
             <Terminal className="w-4 h-4" />
             <span className="ml-1 hidden sm:inline">Console</span>
           </Button>
-          <Button size="sm" variant="destructive" onClick={onExit} data-testid="button-stop-play">
+          <Button size="sm" variant="destructive" onClick={() => onExit(runtime.logs.slice())} data-testid="button-stop-play">
             <X className="w-4 h-4" />
             <span className="ml-1">Stop</span>
           </Button>

@@ -1,4 +1,5 @@
 import type { GameObject, Script } from "@shared/schema";
+import { TweenManager, type Easing } from "./runtime/tween";
 
 export type Vec3 = { x: number; y: number; z: number };
 
@@ -432,6 +433,23 @@ export type GameAPI = {
   after: (seconds: number, fn: () => void) => () => void;
   /** Pause for N seconds. Returns a Promise — usable with `await`. */
   wait: (seconds: number) => Promise<void>;
+  /**
+   * Animate numeric properties over time — the engine handles every frame
+   * for you, so you don't write per-frame interpolation code.
+   *
+   *   tween(part.position, { x: 10 }, 2);          // 2-second slide
+   *   tween(part, { transparency: 1 }, 0.5);       // 0.5s fade-out
+   *   tween(ui, { y: 100 }, 1, "easeOutCubic");    // ease the UI bar
+   *
+   * Returns a cancel function. Pass an `onDone` callback as the 5th arg.
+   */
+  tween: (
+    target: any,
+    to: Record<string, any>,
+    duration: number,
+    easing?: Easing,
+    onDone?: () => void
+  ) => () => void;
   /** Random float in [min, max). */
   random: (min: number, max: number) => number;
   /** Random integer in [min, max] (both inclusive). */
@@ -666,6 +684,9 @@ export class GameRuntime {
   player: RuntimePlayer;
   private _prevKeys: Record<string, boolean> = {};
   private _timers: { fn: () => void; nextAt: number; interval: number; once: boolean }[] = [];
+  /** Tween manager — animates numeric properties over time so devs don't
+   *  have to write per-frame interpolation code (use `tween(part, ...)`). */
+  private _tweens = new TweenManager();
   private _keyDownHandlers = new Map<string, Set<() => void>>();
   private _keyUpHandlers = new Map<string, Set<() => void>>();
   /** Engine-wide event bus (update, keyDown, playerSpawned, ...). */
@@ -696,7 +717,7 @@ export class GameRuntime {
   gui = new Map<string, GuiElement>();
   guiVersion = 0;
   /** Roblox-style RunService for binding to frame phases. */
-  runService: RunServiceAPI;
+  runService!: RunServiceAPI;
 
   constructor(snap: GameObject[], scripts: Script[], username: string, avatarColor: string) {
     const keys: Record<string, boolean> = {};
@@ -1385,6 +1406,23 @@ export class GameRuntime {
     const wait = (seconds: number) =>
       new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, seconds * 1000)));
     const now = () => this.time;
+    /**
+     * Animate numeric properties on any object/vector over `duration` seconds.
+     * The engine advances the tween every frame — script authors don't write
+     * per-frame interpolation code.
+     *
+     *   tween(part.position, { x: 10, y: 5 }, 2, "easeOutQuad");
+     *   tween(part, { transparency: 1 }, 0.5, "linear", () => destroy(part));
+     *
+     * Returns a cancel function. Pass an `onDone` callback as the 5th arg.
+     */
+    const tweenFn = (
+      target: any,
+      to: Record<string, any>,
+      duration: number,
+      easing: Easing = "linear",
+      onDone?: () => void
+    ) => this._tweens.start(target, to, duration, easing, onDone);
     const random = (min: number, max: number) => min + Math.random() * (max - min);
     const randInt = (min: number, max: number) =>
       Math.floor(min + Math.random() * (max - min + 1));
@@ -1428,6 +1466,7 @@ export class GameRuntime {
       every,
       after,
       wait,
+      tween: tweenFn,
       random,
       randInt,
       pick,
@@ -1505,6 +1544,7 @@ export class GameRuntime {
     this._keyUpHandlers.clear();
     this._mouseClickHandlers.clear();
     this._timers.length = 0;
+    this._tweens.clear();
   }
 
   step(dt: number) {
@@ -1661,6 +1701,9 @@ export class GameRuntime {
         }
       }
     }
+
+    // ─── Engine-managed animations (tweens) advance automatically ────────────
+    this._tweens.step(dt);
 
     // ─── Tick the engine "heartbeat" event (after physics, main game loop) ────
     this._events.emit("heartbeat", [dt, this.time], (e, fn) =>
@@ -1895,7 +1938,19 @@ log("game phase is now Playing");
 
 export const SCRIPTING_DOCS = `# Scripting Guide
 
-Your scripts run in **plain JavaScript** — there's no setup, no imports, no npm.
+## What the engine does for you (no code needed)
+- **Clock:** ticks ~60 FPS automatically.
+- **Physics:** gravity, velocity, jumping, ground-snap, collisions.
+- **Rendering:** draws every part from its current position/rotation/color/transparency.
+- **Input plumbing:** keyboard, mouse, mobile joystick all wired to \`player\`.
+- **Animations:** \`tween(...)\` advances every frame on its own.
+- **Timers:** \`every(...)\`, \`after(...)\`, \`wait(...)\` are managed for you.
+
+## What you write (the logic)
+Anything game-specific: rotating a part, sliding a UI bar, counting down a
+timer, scoring, win conditions, spawning enemies.
+
+Your scripts run in **plain JavaScript** — no setup, no imports, no npm.
 Your code runs **once** when Play starts, top to bottom. There is no
 \`onStart\` / \`onUpdate\` boilerplate. To do something every frame, listen for
 the \`heartbeat\` event. \`events.on("update", ...)\` still works as an alias:
@@ -1930,6 +1985,19 @@ log("intro");
 await wait(2);   // pauses for 2 real seconds
 log("main");
 \`\`\`
+
+## Animation: \`tween\` (no per-frame code)
+Need a part to slide, fade, or grow? Don't write a heartbeat handler — let
+the engine animate it for you:
+
+\`\`\`js
+const door = workspace.Door;
+tween(door.position, { y: 5 }, 1.5, "easeOutQuad");   // open over 1.5s
+tween(door, { transparency: 1 }, 0.4, "linear", () => destroy(door));
+\`\`\`
+
+Easings: \`linear\`, \`easeInQuad\`, \`easeOutQuad\`, \`easeInOutQuad\`,
+\`easeInCubic\`, \`easeOutCubic\`, \`easeInOutCubic\`. Returns a cancel function.
 
 Everything in this guide is available as a **bare global** — just type
 \`player.health\`, not \`game.player.health\`. (You don't need to type \`game.\`
