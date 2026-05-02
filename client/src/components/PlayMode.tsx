@@ -550,7 +550,7 @@ export default function PlayMode({
             <Terminal className="w-4 h-4" />
             <span className="ml-1 hidden sm:inline">Console</span>
           </Button>
-          <Button size="sm" variant="destructive" onClick={onExit} data-testid="button-stop-play">
+          <Button size="sm" variant="destructive" onClick={() => onExit(runtime.logs.slice())} data-testid="button-stop-play">
             <X className="w-4 h-4" />
             <span className="ml-1">Stop</span>
           </Button>
