@@ -1,4 +1,5 @@
 import type { GameObject, Script } from "@shared/schema";
+import { TweenManager, type Easing } from "./runtime/tween";
 
 export type Vec3 = { x: number; y: number; z: number };
 
