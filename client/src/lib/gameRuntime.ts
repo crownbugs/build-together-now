@@ -1,4 +1,4 @@
-// client/src/lib/runtime.ts
+// client/src/lib/gameRuntime.ts
 import type { GameObject, Script } from "@shared/schema";
 import { TweenManager, type Easing } from "./runtime/tween";
 import { HierarchyIndex } from "./runtime/hierarchy";
