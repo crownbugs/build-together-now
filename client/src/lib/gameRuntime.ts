@@ -1017,9 +1017,11 @@ export class GameRuntime {
       pick, 
       dist, 
       lerp: lerpFn, 
-      clamp: clampFn 
+      clamp: clampFn,
+      raycast: raycastFn,
+      network: networkApi,
     };
-    return this._api;
+    return this._api!;
   }
 
   emitClick(objId: string | null) { const obj = objId ? (this._all.get(objId) ?? null) : null; if (obj) this.emitObjectEvent(obj.id, "clicked", [obj]); for (const fn of this._mouseClickHandlers) { try { fn(obj); } catch (e: any) { this.pushLog(`mouse.onClick error: ${formatErr(e)}`); } } }
