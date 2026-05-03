@@ -1397,6 +1397,31 @@ runService.update.on((dt) => {
 
 every(0.8, () => spawnBlock());
 log("Game ready! Clean runService API, auto-updates, everything works!");
+
+// ========== HIERARCHY (PARENTING) ==========
+// Every object can be parented like Roblox. Children move with destroy().
+const turret = create({ primitiveType: "cube", position: { x: 0, y: 1, z: 0 }, color: "#888" });
+const barrel = create({ primitiveType: "cylinder", position: { x: 0, y: 1.5, z: 0 }, color: "#444", parent: turret });
+log("turret children:", turret.children.length);  // 1
+// barrel.setParent(null) to detach. destroy(turret) also destroys barrel.
+
+// ========== canCollide WORKS ON EVERYTHING ==========
+const ghostWall = create({ primitiveType: "cube", scale: { x: 4, y: 4, z: 0.2 }, color: "#aaf", canCollide: false });
+// Other parts (and the player) pass right through ghostWall.
+
+// ========== RAYCASTING ==========
+runService.update.on(() => {
+  const hit = raycast(player.position, { x: 0, y: -1, z: 0 }, 5);
+  if (hit) log("ground:", hit.object.name, "@", hit.distance.toFixed(2));
+});
+
+// ========== REPLICATION (server-authoritative stub) ==========
+// Server side: receive client input, broadcast snapshots automatically.
+network.server.on("__input", (msg) => { /* msg.moveX, msg.jump, ... */ });
+network.server.broadcast("hello", { msg: "welcome" });
+// Client side: send custom messages up, listen for snapshots down.
+network.client.on("__snapshot", (snap) => { /* snap.player, snap.objects */ });
+network.client.send("action", { kind: "fire" });
 `;
 
 export const SCRIPTING_DOCS = `# Scripting Guide - Clean API Edition!
