@@ -28,7 +28,7 @@ export type ObjectProperties = {
   transparency: number;
   mass: number;
   friction: number;
-  gravityEnabled: boolean;
+  gravityEnabled: boolean;   // internal, but kept for backward compat
   gravityStrength: number;
   gravityRadius: number;
   /** Auto-rotation speed in radians per second (Y axis). Set this and it rotates automatically! */
@@ -73,9 +73,6 @@ export type RuntimeObject = {
   transparency: number;
   mass: number;
   friction: number;
-  gravityEnabled: boolean;
-  gravityStrength: number;
-  gravityRadius: number;
   velocity: Vec3;
   isPickup?: boolean;
   pickupName?: string;
@@ -109,6 +106,10 @@ export type RuntimeObject = {
   includeInGravity: (obj: RuntimeObject | RuntimePlayer) => void;
   /** Internal: set of excluded object IDs */
   _gravityExcludeSet: Set<string>;
+  /** Internal storage for gravity (backwards compatibility) */
+  _gravityEnabled: boolean;
+  _gravityStrength: number;
+  _gravityRadius: number;
 };
 export type InventoryItem = {
   id: string;
@@ -608,6 +609,9 @@ export class GameRuntime {
         _gravityExcludeSet: new Set(),
         excludeFromGravity: () => {},
         includeInGravity: () => {},
+        _gravityEnabled: props.gravityEnabled,
+        _gravityStrength: props.gravityStrength,
+        _gravityRadius: props.gravityRadius,
       };
       const ro = this.mountObjectEvents(rawRo);
       this._all.set(ro.id, ro);
@@ -757,6 +761,32 @@ export class GameRuntime {
     const id = raw.id;
     const propertyEvents = new Map<string, EventBus<Record<"changed", [property: string, newValue: any, oldValue: any]>>>();
 
+    // Define the `gravity` accessor directly on the raw object (configurable)
+    Object.defineProperty(raw, "gravity", {
+      enumerable: true,
+      configurable: true,
+      get: function(this: RuntimeObject) {
+        return {
+          enabled: this._gravityEnabled,
+          strength: this._gravityStrength,
+          radius: this._gravityRadius,
+        };
+      },
+      set: function(this: RuntimeObject, value: boolean | { enabled?: boolean; strength?: number; radius?: number }) {
+        if (typeof value === "boolean") {
+          this._gravityEnabled = value;
+        } else if (value && typeof value === "object") {
+          if (value.enabled !== undefined) this._gravityEnabled = value.enabled;
+          if (value.strength !== undefined) this._gravityStrength = value.strength;
+          if (value.radius !== undefined) this._gravityRadius = value.radius;
+        }
+        // Also update the old properties for backwards compatibility
+        this.gravityEnabled = this._gravityEnabled;
+        this.gravityStrength = this._gravityStrength;
+        this.gravityRadius = this._gravityRadius;
+      },
+    });
+
     // Gravity helper methods (wired to the raw object)
     raw.excludeFromGravity = (obj: RuntimeObject | RuntimePlayer) => {
       raw._gravityExcludeSet.add(obj.id);
@@ -765,42 +795,8 @@ export class GameRuntime {
       raw._gravityExcludeSet.delete(obj.id);
     };
 
-    // Create the proxy that handles the `gravity` property directly
     const proxy = new Proxy(raw, {
-      get(target, prop, receiver) {
-        if (prop === "gravity") {
-          // Return a live object with getters/setters that target the underlying properties
-          return {
-            get enabled() { return target.gravityEnabled; },
-            set enabled(v: boolean) { target.gravityEnabled = v; },
-            get strength() { return target.gravityStrength; },
-            set strength(v: number) { target.gravityStrength = v; },
-            get radius() { return target.gravityRadius; },
-            set radius(v: number) { target.gravityRadius = v; },
-          };
-        }
-        const value = Reflect.get(target, prop, receiver);
-        // Bind methods to the proxy instance when needed
-        if (typeof value === "function" && (prop === "on" || prop === "off" || prop === "setParent" || prop === "findFirstChild" || prop === "GetPropertyChangedSignal" || prop === "excludeFromGravity" || prop === "includeInGravity")) {
-          return value.bind(receiver);
-        }
-        return value;
-      },
       set(target, prop, value, receiver) {
-        if (prop === "gravity") {
-          // Handle `obj.gravity = true` or `obj.gravity = { enabled, strength, radius }`
-          if (typeof value === "boolean") {
-            target.gravityEnabled = value;
-          } else if (value && typeof value === "object") {
-            if (value.enabled !== undefined) target.gravityEnabled = value.enabled;
-            if (value.strength !== undefined) target.gravityStrength = value.strength;
-            if (value.radius !== undefined) target.gravityRadius = value.radius;
-          }
-          // Notify property changed signal for "gravity" (optional)
-          const generalBus = this._objectEvents.get(id);
-          if (generalBus) generalBus.emit("changed", ["gravity", value, undefined]);
-          return true;
-        }
         const oldValue = Reflect.get(target, prop, receiver);
         if (oldValue !== value) {
           Reflect.set(target, prop, value, receiver);
@@ -888,6 +884,9 @@ export class GameRuntime {
       _gravityExcludeSet: new Set(),
       excludeFromGravity: () => {},
       includeInGravity: () => {},
+      _gravityEnabled: DEFAULT_PROPERTIES.gravityEnabled,
+      _gravityStrength: DEFAULT_PROPERTIES.gravityStrength,
+      _gravityRadius: DEFAULT_PROPERTIES.gravityRadius,
     };
     const ro = this.mountObjectEvents(raw);
     this._all.set(ro.id, ro);
@@ -918,9 +917,6 @@ export class GameRuntime {
       transparency: tpl.transparency,
       mass: tpl.mass,
       friction: tpl.friction,
-      gravityEnabled: tpl.gravityEnabled,
-      gravityStrength: tpl.gravityStrength,
-      gravityRadius: tpl.gravityRadius,
       velocity: { x: 0, y: 0, z: 0 },
       on: () => () => {},
       off: () => {},
@@ -932,6 +928,9 @@ export class GameRuntime {
       _gravityExcludeSet: new Set(),
       excludeFromGravity: () => {},
       includeInGravity: () => {},
+      _gravityEnabled: tpl._gravityEnabled,
+      _gravityStrength: tpl._gravityStrength,
+      _gravityRadius: tpl._gravityRadius,
     };
     const ro = this.mountObjectEvents(raw);
     this._all.set(ro.id, ro);
@@ -1039,7 +1038,7 @@ export class GameRuntime {
     };
     const raycastFn = (origin: Vec3, direction: Vec3, maxDistance = 100, params?: RaycastParams) => raycastWorld(this._all.values(), origin, direction, maxDistance, params);
     const networkApi = { server: this.network.server, client: this.network.client };
-    const spawn = (templateName: string, overrides?: Partial<RuntimeObject>): RuntimeObject | null => { const tpl = this.replicatedStorage[templateName]; if (!tpl) { this.pushLog(`spawn(): no ReplicatedStorage template named "${templateName}"`); return null; } const ro = this.cloneTemplateInto(tpl, "Workspace", overrides?.position ? { ...tpl.position, ...overrides.position } : undefined); if (overrides) { if (overrides.name) { ro.name = overrides.name; this.rebuildIndexes(); } if (overrides.rotation) Object.assign(ro.rotation, overrides.rotation); if (overrides.scale) Object.assign(ro.scale, overrides.scale); if (overrides.color != null) ro.color = overrides.color; if (overrides.visible != null) ro.visible = overrides.visible; if (overrides.anchored != null) ro.anchored = overrides.anchored; if (overrides.canCollide != null) ro.canCollide = overrides.canCollide; if (overrides.transparency != null) ro.transparency = overrides.transparency; if (overrides.mass != null) ro.mass = overrides.mass; if (overrides.friction != null) ro.friction = overrides.friction; if (overrides.gravityEnabled != null) ro.gravityEnabled = overrides.gravityEnabled; if (overrides.gravityStrength != null) ro.gravityStrength = overrides.gravityStrength; if (overrides.gravityRadius != null) ro.gravityRadius = overrides.gravityRadius; if (overrides.velocity) Object.assign(ro.velocity, overrides.velocity); } return ro; };
+    const spawn = (templateName: string, overrides?: Partial<RuntimeObject>): RuntimeObject | null => { const tpl = this.replicatedStorage[templateName]; if (!tpl) { this.pushLog(`spawn(): no ReplicatedStorage template named "${templateName}"`); return null; } const ro = this.cloneTemplateInto(tpl, "Workspace", overrides?.position ? { ...tpl.position, ...overrides.position } : undefined); if (overrides) { if (overrides.name) { ro.name = overrides.name; this.rebuildIndexes(); } if (overrides.rotation) Object.assign(ro.rotation, overrides.rotation); if (overrides.scale) Object.assign(ro.scale, overrides.scale); if (overrides.color != null) ro.color = overrides.color; if (overrides.visible != null) ro.visible = overrides.visible; if (overrides.anchored != null) ro.anchored = overrides.anchored; if (overrides.canCollide != null) ro.canCollide = overrides.canCollide; if (overrides.transparency != null) ro.transparency = overrides.transparency; if (overrides.mass != null) ro.mass = overrides.mass; if (overrides.friction != null) ro.friction = overrides.friction; if (overrides.velocity) Object.assign(ro.velocity, overrides.velocity); } return ro; };
     const destroy = (target: RuntimeObject | string) => { if (typeof target === "string") { for (const ro of this._all.values()) if (ro.name === target || ro.id === target) { this.removeObject(ro.id); this.rebuildIndexes(); return; } return; } this.removeObject(target.id); this.rebuildIndexes(); };
     const guiText = (id: string, text: string, opts?: Partial<Omit<GuiElement, "id" | "kind" | "text">>) => { const prev = this.gui.get(id); const el: GuiElement = { id, kind: "text", text, x: opts?.x ?? prev?.x ?? 0, y: opts?.y ?? prev?.y ?? 0, anchor: opts?.anchor ?? prev?.anchor ?? "tl", color: opts?.color ?? prev?.color ?? "#ffffff", size: opts?.size ?? prev?.size ?? 16, bg: opts?.bg ?? prev?.bg }; this.gui.set(id, el); this.guiVersion++; };
     const guiButton = (id: string, text: string, opts: Partial<Omit<GuiElement, "id" | "kind" | "text">> | undefined, onClick?: (game: GameAPI) => void) => { const prev = this.gui.get(id); const el: GuiElement = { id, kind: "button", text, x: opts?.x ?? prev?.x ?? 16, y: opts?.y ?? prev?.y ?? 16, anchor: opts?.anchor ?? prev?.anchor ?? "tl", color: opts?.color ?? prev?.color ?? "#ffffff", size: opts?.size ?? prev?.size ?? 14, bg: opts?.bg ?? prev?.bg ?? "rgba(30,40,60,0.85)", onClick: onClick ?? prev?.onClick }; this.gui.set(id, el); this.guiVersion++; };
@@ -1337,14 +1336,14 @@ export class GameRuntime {
   private computeGravity(point: Vec3, subject: RuntimeObject | RuntimePlayer): Vec3 {
     let bestMag = 0, best: Vec3 | null = null;
     for (const o of this.objectList) {
-      if (!o.gravityEnabled) continue;
+      if (!o._gravityEnabled) continue;
       if (subject.id === o.id) continue;
       // Skip if the subject is excluded from this source's gravity
       if (o._gravityExcludeSet.has(subject.id)) continue;
       const { surfaceDistance, dirToCenter, surfaceRadius } = pointVsObjectSurface(point, o);
-      if (surfaceDistance > o.gravityRadius) continue;
+      if (surfaceDistance > o._gravityRadius) continue;
       const r = Math.max(surfaceRadius, surfaceRadius + Math.max(0, surfaceDistance));
-      const accel = (o.gravityStrength * surfaceRadius * surfaceRadius) / (r * r);
+      const accel = (o._gravityStrength * surfaceRadius * surfaceRadius) / (r * r);
       if (accel > bestMag) { bestMag = accel; best = { x: dirToCenter.x * accel, y: dirToCenter.y * accel, z: dirToCenter.z * accel }; }
     }
     return best || { x: 0, y: -(this.physics.gravity || 9.81), z: 0 };
@@ -1416,7 +1415,7 @@ export class GameRuntime {
 }
 
 // ----------------------------------------------------------------------
-//  DEFAULT SCRIPT AND DOCS
+//  DEFAULT SCRIPT AND DOCS (updated for new gravity API)
 // ----------------------------------------------------------------------
 export const DEFAULT_SCRIPT = `// Welcome! Clean, consistent API - just .on(fn) for everything!
 
