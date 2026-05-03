@@ -593,6 +593,10 @@ export class GameRuntime {
         velocity: { x: 0, y: 0, z: 0 },
         on: () => () => {},
         off: () => {},
+        parentId: null,
+        children: [],
+        findFirstChild: () => null,
+        setParent: () => {},
         GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
       };
       this.mountObjectEvents(ro);
@@ -787,7 +791,11 @@ export class GameRuntime {
       velocity: { x: 0, y: 0, z: 0 },
       on: () => () => {},
       off: () => {},
-      GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+      parentId: null,
+        children: [],
+        findFirstChild: () => null,
+        setParent: () => {},
+        GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
     };
     const proxiedRo = this.mountObjectEvents(ro);
     this._all.set(ro.id, proxiedRo);
@@ -819,7 +827,11 @@ export class GameRuntime {
       velocity: { x: 0, y: 0, z: 0 },
       on: () => () => {},
       off: () => {},
-      GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+      parentId: null,
+        children: [],
+        findFirstChild: () => null,
+        setParent: () => {},
+        GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
     };
     const proxiedRo = this.mountObjectEvents(ro);
     this._all.set(ro.id, proxiedRo);
