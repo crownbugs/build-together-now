@@ -551,6 +551,10 @@ export class GameRuntime {
   private _playerContacts = new Set<string>();
   private _api: GameAPI | null = null;
   private _mouseClickHandlers = new Set<(obj: RuntimeObject | null) => void>();
+  /** Parent → children index. Maintained alongside `_all`. */
+  hierarchy = new HierarchyIndex();
+  /** Local server-authoritative replication stub. */
+  network = new NetworkBus();
   input: RuntimeInput;
   physics: RuntimePhysics = { gravity: 9.81, airDrag: 0 };
   cameraYaw = 0;
