@@ -104,9 +104,9 @@ export type RuntimeObject = {
     radius: number;
   };
   /** Exclude another object from being affected by this object's gravity. */
-  excludeFromGravity: (obj: RuntimeObject) => void;
+  excludeFromGravity: (obj: RuntimeObject | RuntimePlayer) => void;
   /** Remove exclusion, so the object is affected by this gravity source again. */
-  includeInGravity: (obj: RuntimeObject) => void;
+  includeInGravity: (obj: RuntimeObject | RuntimePlayer) => void;
   /** Internal: set of excluded object IDs */
   _gravityExcludeSet: Set<string>;
 };
@@ -132,6 +132,7 @@ export type PlayerInventory = {
 };
 
 export type RuntimePlayer = {
+  id: string;
   username: string;
   color: string;
   position: Vec3;
@@ -607,8 +608,8 @@ export class GameRuntime {
         _gravityExcludeSet: new Set(),
         excludeFromGravity: () => {},
         includeInGravity: () => {},
-        gravity: { enabled: props.gravityEnabled, strength: props.gravityStrength, radius: props.gravityRadius },
       };
+      // We'll define gravity property in mountObjectEvents
       const ro = this.mountObjectEvents(rawRo);
       this._all.set(ro.id, ro);
       if (this.hasAutoProperties(ro)) this._autoPropObjects.add(ro);
@@ -621,6 +622,7 @@ export class GameRuntime {
       : { x: 0, y: 1, z: 4 };
 
     this.player = {
+      id: newId(),
       username,
       color: avatarColor,
       position: { ...spawnPoint },
@@ -756,28 +758,32 @@ export class GameRuntime {
     const id = raw.id;
     const propertyEvents = new Map<string, EventBus<Record<"changed", [property: string, newValue: any, oldValue: any]>>>();
 
-    // Gravity helper methods
-    raw.excludeFromGravity = (obj: RuntimeObject) => {
+    // Gravity helper methods (will be overwritten by proxy setter if needed, but we define them here)
+    raw.excludeFromGravity = (obj: RuntimeObject | RuntimePlayer) => {
       raw._gravityExcludeSet.add(obj.id);
     };
-    raw.includeInGravity = (obj: RuntimeObject) => {
+    raw.includeInGravity = (obj: RuntimeObject | RuntimePlayer) => {
       raw._gravityExcludeSet.delete(obj.id);
     };
 
-    // Gravity property getter/setter
+    // Define gravity property with getter/setter (replacing any existing property)
     Object.defineProperty(raw, "gravity", {
-      get: () => ({
-        enabled: raw.gravityEnabled,
-        strength: raw.gravityStrength,
-        radius: raw.gravityRadius,
-      }),
-      set: (value: boolean | { enabled?: boolean; strength?: number; radius?: number }) => {
+      enumerable: true,
+      configurable: true,
+      get: function(this: RuntimeObject) {
+        return {
+          enabled: this.gravityEnabled,
+          strength: this.gravityStrength,
+          radius: this.gravityRadius,
+        };
+      },
+      set: function(this: RuntimeObject, value: boolean | { enabled?: boolean; strength?: number; radius?: number }) {
         if (typeof value === "boolean") {
-          raw.gravityEnabled = value;
+          this.gravityEnabled = value;
         } else {
-          if (value.enabled !== undefined) raw.gravityEnabled = value.enabled;
-          if (value.strength !== undefined) raw.gravityStrength = value.strength;
-          if (value.radius !== undefined) raw.gravityRadius = value.radius;
+          if (value.enabled !== undefined) this.gravityEnabled = value.enabled;
+          if (value.strength !== undefined) this.gravityStrength = value.strength;
+          if (value.radius !== undefined) this.gravityRadius = value.radius;
         }
       },
     });
@@ -872,7 +878,6 @@ export class GameRuntime {
       _gravityExcludeSet: new Set(),
       excludeFromGravity: () => {},
       includeInGravity: () => {},
-      gravity: { enabled: DEFAULT_PROPERTIES.gravityEnabled, strength: DEFAULT_PROPERTIES.gravityStrength, radius: DEFAULT_PROPERTIES.gravityRadius },
     };
     const ro = this.mountObjectEvents(raw);
     this._all.set(ro.id, ro);
@@ -917,7 +922,6 @@ export class GameRuntime {
       _gravityExcludeSet: new Set(),
       excludeFromGravity: () => {},
       includeInGravity: () => {},
-      gravity: { enabled: tpl.gravityEnabled, strength: tpl.gravityStrength, radius: tpl.gravityRadius },
     };
     const ro = this.mountObjectEvents(raw);
     this._all.set(ro.id, ro);
@@ -1324,7 +1328,7 @@ export class GameRuntime {
     let bestMag = 0, best: Vec3 | null = null;
     for (const o of this.objectList) {
       if (!o.gravityEnabled) continue;
-      if (subject instanceof RuntimeObject && subject.id === o.id) continue;
+      if (subject.id === o.id) continue;
       // Skip if the subject is excluded from this source's gravity
       if (o._gravityExcludeSet.has(subject.id)) continue;
       const { surfaceDistance, dirToCenter, surfaceRadius } = pointVsObjectSurface(point, o);
@@ -1402,7 +1406,7 @@ export class GameRuntime {
 }
 
 // ----------------------------------------------------------------------
-//  DEFAULT SCRIPT AND DOCS (unchanged, kept for reference)
+//  DEFAULT SCRIPT AND DOCS
 // ----------------------------------------------------------------------
 export const DEFAULT_SCRIPT = `// Welcome! Clean, consistent API - just .on(fn) for everything!
 
