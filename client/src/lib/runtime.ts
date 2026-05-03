@@ -609,7 +609,6 @@ export class GameRuntime {
         excludeFromGravity: () => {},
         includeInGravity: () => {},
       };
-      // We'll define gravity property in mountObjectEvents
       const ro = this.mountObjectEvents(rawRo);
       this._all.set(ro.id, ro);
       if (this.hasAutoProperties(ro)) this._autoPropObjects.add(ro);
@@ -758,7 +757,7 @@ export class GameRuntime {
     const id = raw.id;
     const propertyEvents = new Map<string, EventBus<Record<"changed", [property: string, newValue: any, oldValue: any]>>>();
 
-    // Gravity helper methods (will be overwritten by proxy setter if needed, but we define them here)
+    // Gravity helper methods (wired to the raw object)
     raw.excludeFromGravity = (obj: RuntimeObject | RuntimePlayer) => {
       raw._gravityExcludeSet.add(obj.id);
     };
@@ -766,50 +765,61 @@ export class GameRuntime {
       raw._gravityExcludeSet.delete(obj.id);
     };
 
-    // Define gravity property with getter/setter (replacing any existing property)
-    Object.defineProperty(raw, "gravity", {
-      enumerable: true,
-      configurable: true,
-      get: function(this: RuntimeObject) {
-        return {
-          enabled: this.gravityEnabled,
-          strength: this.gravityStrength,
-          radius: this.gravityRadius,
-        };
-      },
-      set: function(this: RuntimeObject, value: boolean | { enabled?: boolean; strength?: number; radius?: number }) {
-        if (typeof value === "boolean") {
-          this.gravityEnabled = value;
-        } else {
-          if (value.enabled !== undefined) this.gravityEnabled = value.enabled;
-          if (value.strength !== undefined) this.gravityStrength = value.strength;
-          if (value.radius !== undefined) this.gravityRadius = value.radius;
-        }
-      },
-    });
-
+    // Create the proxy that handles the `gravity` property directly
     const proxy = new Proxy(raw, {
-      set: (target, prop, value) => {
-        const propName = prop as string;
-        const oldValue = (target as any)[propName];
-        if (oldValue !== value) {
-          (target as any)[propName] = value;
-          // Fire property changed signals
-          const propBus = propertyEvents.get(propName);
-          if (propBus) propBus.emit("changed", [propName, value, oldValue]);
+      get(target, prop, receiver) {
+        if (prop === "gravity") {
+          // Return a live object with getters/setters that target the underlying properties
+          return {
+            get enabled() { return target.gravityEnabled; },
+            set enabled(v: boolean) { target.gravityEnabled = v; },
+            get strength() { return target.gravityStrength; },
+            set strength(v: number) { target.gravityStrength = v; },
+            get radius() { return target.gravityRadius; },
+            set radius(v: number) { target.gravityRadius = v; },
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        // Bind methods to the proxy instance when needed
+        if (typeof value === "function" && (prop === "on" || prop === "off" || prop === "setParent" || prop === "findFirstChild" || prop === "GetPropertyChangedSignal" || prop === "excludeFromGravity" || prop === "includeInGravity")) {
+          return value.bind(receiver);
+        }
+        return value;
+      },
+      set(target, prop, value, receiver) {
+        if (prop === "gravity") {
+          // Handle `obj.gravity = true` or `obj.gravity = { enabled, strength, radius }`
+          if (typeof value === "boolean") {
+            target.gravityEnabled = value;
+          } else if (value && typeof value === "object") {
+            if (value.enabled !== undefined) target.gravityEnabled = value.enabled;
+            if (value.strength !== undefined) target.gravityStrength = value.strength;
+            if (value.radius !== undefined) target.gravityRadius = value.radius;
+          }
+          // Notify property changed signal for "gravity" (optional)
           const generalBus = this._objectEvents.get(id);
-          if (generalBus) generalBus.emit("changed", [propName, value, oldValue]);
+          if (generalBus) generalBus.emit("changed", ["gravity", value, undefined]);
+          return true;
+        }
+        const oldValue = Reflect.get(target, prop, receiver);
+        if (oldValue !== value) {
+          Reflect.set(target, prop, value, receiver);
+          // Fire property changed signals
+          const propBus = propertyEvents.get(prop as string);
+          if (propBus) propBus.emit("changed", [prop as string, value, oldValue]);
+          const generalBus = this._objectEvents.get(id);
+          if (generalBus) generalBus.emit("changed", [prop as string, value, oldValue]);
           // Update auto-property tracking
-          if (["autoRotateY", "autoBob", "autoFollow", "autoSpin", "autoMove"].includes(propName)) {
+          if (["autoRotateY", "autoBob", "autoFollow", "autoSpin", "autoMove"].includes(prop as string)) {
             if (value !== undefined) this._autoPropObjects.add(proxy);
             else this._autoPropObjects.delete(proxy);
           }
         }
         return true;
-      }
+      }.bind(this)
     });
 
-    // Event methods
+    // Event methods (need to refer to the proxy's own event bus)
     proxy.on = (event, fn) => {
       let bus = this._objectEvents.get(id);
       if (!bus) { bus = new EventBus(); this._objectEvents.set(id, bus); }
