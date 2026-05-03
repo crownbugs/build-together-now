@@ -1,3 +1,4 @@
+// client/src/lib/runtime.ts
 import type { GameObject, Script } from "@shared/schema";
 import { TweenManager, type Easing } from "./runtime/tween";
 import { HierarchyIndex } from "./runtime/hierarchy";
@@ -27,9 +28,8 @@ export type ObjectProperties = {
   transparency: number;
   mass: number;
   friction: number;
-  gravityEnabled: boolean;
-  gravityStrength: number;
-  gravityRadius: number;
+  /** Gravity source configuration. false = no gravity, true = default (strength 9.81, radius 30), or object with strength/radius. */
+  gravity: boolean | { strength: number; radius: number };
   /** Auto-rotation speed in radians per second (Y axis). Set this and it rotates automatically! */
   autoRotateY?: number;
   /** Auto-bob amplitude and speed. Set this and it bobs up and down automatically! */
@@ -48,9 +48,7 @@ export const DEFAULT_PROPERTIES: ObjectProperties = {
   transparency: 0,
   mass: 1,
   friction: 0.4,
-  gravityEnabled: false,
-  gravityStrength: 9.81,
-  gravityRadius: 30,
+  gravity: false,
 };
 
 /** Events a script can subscribe to on a single object via `obj.on(...)`. */
@@ -72,9 +70,7 @@ export type RuntimeObject = {
   transparency: number;
   mass: number;
   friction: number;
-  gravityEnabled: boolean;
-  gravityStrength: number;
-  gravityRadius: number;
+  gravity: boolean | { strength: number; radius: number };
   velocity: Vec3;
   isPickup?: boolean;
   pickupName?: string;
@@ -96,6 +92,10 @@ export type RuntimeObject = {
   on: (event: ObjectEventName, fn: (...args: any[]) => void) => () => void;
   off: (event: ObjectEventName, fn: (...args: any[]) => void) => void;
   GetPropertyChangedSignal: (property: string) => EventsAPI;
+  /** Exclude this object from the gravity field of another object. */
+  excludeGravity: (source: RuntimeObject, exclude: boolean) => void;
+  /** Check if this object is excluded from a gravity source. */
+  isExcludedFromGravity: (source: RuntimeObject) => boolean;
 };
 export type InventoryItem = {
   id: string;
@@ -139,6 +139,10 @@ export type RuntimePlayer = {
   heal: (n: number) => void;
   teleport: (x: number, y: number, z: number) => void;
   respawn: () => void;
+  /** Exclude this player from the gravity field of another object. */
+  excludeGravity: (source: RuntimeObject, exclude: boolean) => void;
+  /** Check if excluded from a gravity source. */
+  isExcludedFromGravity: (source: RuntimeObject) => boolean;
 };
 
 export type RuntimeInput = {
@@ -374,64 +378,36 @@ export type CompiledScript = {
   error?: string;
 };
 
+// ----------------------------------------------------------------------
+//  IMPROVED SCRIPT EVALUATION (limited sandbox - WARNING: not fully secure)
+// ----------------------------------------------------------------------
+function safeEval(code: string, context: Record<string, any>): (api: GameAPI) => void {
+  // In a real production environment, use a proper sandbox like 'vm2' (Node) or an iframe + postMessage (browser).
+  // This simple proxy blocks access to dangerous globals but is not 100% secure.
+  const globalProxy = new Proxy({} as any, {
+    get(_, prop) {
+      if (prop in context) return context[prop];
+      const blocked = ["eval", "Function", "setTimeout", "setInterval", "fetch", "XMLHttpRequest", "localStorage", "sessionStorage", "window", "global", "process"];
+      if (blocked.includes(String(prop))) return undefined;
+      const safeBuiltins = ["Object", "Array", "Math", "Date", "JSON", "String", "Number", "Boolean", "RegExp", "Error", "Map", "Set", "Promise"];
+      if (safeBuiltins.includes(String(prop)) && typeof globalThis[prop as keyof typeof globalThis] === "function") {
+        return globalThis[prop as keyof typeof globalThis];
+      }
+      return undefined;
+    },
+    set() { return true; }
+  });
+  const fnBody = `"use strict"; with (__ctx__) { return (${code}) }`;
+  const factory = new Function("__ctx__", fnBody);
+  const scriptFn = factory(globalProxy);
+  return (api: GameAPI) => scriptFn(api);
+}
+
 export function compileScript(code: string, name: string): CompiledScript {
   try {
-    const safeCode = code
-      .replace(/\\/g, "\\\\")
-      .replace(/`/g, "\\`")
-      .replace(/\$\{/g, "\\${");
-
-    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-
-    const factory = new AsyncFunction(
-      "game",
-      `"use strict";
-       const objects = game.objects;
-       const workspace = game.workspace;
-       const lighting = game.lighting;
-       const replicatedStorage = game.replicatedStorage;
-       const serverScriptService = game.serverScriptService;
-       const starterPlayer = game.starterPlayer;
-       const players = game.players;
-       const player = game.player;
-       const input = game.input;
-       const physics = game.physics;
-       const state = game.state;
-       const runService = game.runService;
-       const keyboard = game.keyboard;
-       const mouse = game.mouse;
-       const world = game.world;
-       const gui = game.gui;
-       const log = game.log;
-       const inventory = game.player ? game.player.inventory : undefined;
-       const find = game.find;
-       const spawn = game.spawn;
-       const create = game.create;
-       const destroy = game.destroy;
-       const onKey = game.onKey;
-       const onUpdate = game.onUpdate;
-       const every = game.every;
-       const after = game.after;
-       const wait = game.wait;
-       const now = game.now;
-       const random = game.random;
-       const randInt = game.randInt;
-       const pick = game.pick;
-       const dist = game.dist;
-       const lerp = game.lerp;
-       const clamp = game.clamp;
-       const raycast = game.raycast;
-       const network = game.network;
-       const console = {
-         log:   (...a) => game.log(...a),
-         info:  (...a) => game.log("[info]", ...a),
-         warn:  (...a) => game.log("[warn]", ...a),
-         error: (...a) => game.log("[error]", ...a),
-       };
-       ${safeCode}`,
-    );
-
-    return { name, run: factory as (api: GameAPI) => void };
+    // Use safeEval instead of raw AsyncFunction
+    const run = safeEval(code, {});
+    return { name, run };
   } catch (e: any) {
     const msg = e?.message ?? String(e);
     const stack = typeof e?.stack === "string"
@@ -456,15 +432,23 @@ function clamp01(n: number) { return Math.max(0, Math.min(1, n)); }
 function readProperties(o: GameObject): ObjectProperties {
   const p = (o.properties ?? {}) as Partial<ObjectProperties>;
   const isLightOrSpawn = o.type === "light" || o.type === "spawn";
+  let gravityProp: boolean | { strength: number; radius: number } = false;
+  if (p.gravity === true) {
+    gravityProp = { strength: 9.81, radius: 30 };
+  } else if (p.gravity && typeof p.gravity === "object" && "strength" in p.gravity && "radius" in p.gravity) {
+    gravityProp = { strength: p.gravity.strength, radius: p.gravity.radius };
+  } else if (p.gravity === false || p.gravity === undefined) {
+    gravityProp = false;
+  } else {
+    gravityProp = false;
+  }
   return {
     anchored: p.anchored ?? true,
     canCollide: p.canCollide ?? !isLightOrSpawn,
     transparency: clamp01(p.transparency ?? 0),
     mass: p.mass ?? DEFAULT_PROPERTIES.mass,
     friction: p.friction ?? DEFAULT_PROPERTIES.friction,
-    gravityEnabled: p.gravityEnabled ?? false,
-    gravityStrength: p.gravityStrength ?? DEFAULT_PROPERTIES.gravityStrength,
-    gravityRadius: p.gravityRadius ?? DEFAULT_PROPERTIES.gravityRadius,
+    gravity: gravityProp,
     autoRotateY: p.autoRotateY,
     autoBob: p.autoBob,
     autoFollow: p.autoFollow,
@@ -545,6 +529,7 @@ function createStubInventory(): PlayerInventory {
 
 export class GameRuntime {
   private _all = new Map<string, RuntimeObject>();
+  private _autoPropObjects = new Set<RuntimeObject>(); // performance: only objects with active auto-properties
   objectList: RuntimeObject[] = [];
   objects: Record<string, RuntimeObject> = {};
   workspace: Record<string, RuntimeObject> = {};
@@ -558,7 +543,7 @@ export class GameRuntime {
   private _stateApi: RuntimeState | null = null;
   player: RuntimePlayer;
   private _prevKeys: Record<string, boolean> = {};
-  private _timers: { fn: () => void; nextAt: number; interval: number; once: boolean }[] = [];
+  private _timers: { fn: () => void; nextAt: number; interval: number; once: boolean; dispose?: () => void }[] = [];
   private _tweens = new TweenManager();
   private _keyDownHandlers = new Map<string, Set<() => void>>();
   private _keyUpHandlers = new Map<string, Set<() => void>>();
@@ -598,7 +583,7 @@ export class GameRuntime {
     for (const o of snap) {
       const props = readProperties(o);
       const container = this.normalizeContainer(o.container);
-      const ro: RuntimeObject = {
+      const rawRo: RuntimeObject = {
         id: o.id,
         name: o.name,
         type: o.type,
@@ -618,9 +603,12 @@ export class GameRuntime {
         findFirstChild: () => null,
         setParent: () => {},
         GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+        excludeGravity: () => {},
+        isExcludedFromGravity: () => false,
       };
-      this.mountObjectEvents(ro);
+      const ro = this.mountObjectEvents(rawRo);
       this._all.set(ro.id, ro);
+      if (this.hasAutoProperties(ro)) this._autoPropObjects.add(ro);
     }
     this.rebuildIndexes();
 
@@ -649,6 +637,8 @@ export class GameRuntime {
       heal: () => {},
       teleport: () => {},
       respawn: () => {},
+      excludeGravity: () => {},
+      isExcludedFromGravity: () => false,
     };
 
     this.mountPlayerInventory();
@@ -664,7 +654,6 @@ export class GameRuntime {
   }
 
   private initRunService() {
-    // Create clean channels for each phase using the EventBus's createChannel method
     this.runService = {
       input: this._events.createChannel("input"),
       animation: this._events.createChannel("animation"),
@@ -756,54 +745,94 @@ export class GameRuntime {
       p.health = p.maxHealth;
       this.pushLog(`${p.username} respawned.`);
     };
+    // Gravity exclusion for player
+    const playerExcludes = new Set<string>();
+    p.excludeGravity = (source: RuntimeObject, exclude: boolean) => {
+      if (exclude) playerExcludes.add(source.id);
+      else playerExcludes.delete(source.id);
+    };
+    p.isExcludedFromGravity = (source: RuntimeObject) => playerExcludes.has(source.id);
+    (p as any)._gravityExcludes = playerExcludes;
   }
 
-  private mountObjectEvents(ro: RuntimeObject) {
-    const id = ro.id;
-    ro.on = (event, fn) => { let bus = this._objectEvents.get(id); if (!bus) { bus = new EventBus(); this._objectEvents.set(id, bus); } return bus.on(event as any, fn as any); };
-    ro.off = (event, fn) => { this._objectEvents.get(id)?.off(event as any, fn as any); };
+  private hasAutoProperties(o: RuntimeObject): boolean {
+    return !!(o.autoRotateY || o.autoBob || o.autoFollow || o.autoSpin || o.autoMove);
+  }
 
+  private mountObjectEvents(raw: RuntimeObject): RuntimeObject {
+    const id = raw.id;
     const propertyEvents = new Map<string, EventBus<Record<"changed", [property: string, newValue: any, oldValue: any]>>>();
-    ro.GetPropertyChangedSignal = (property: string) => {
-      let bus = propertyEvents.get(property);
-      if (!bus) { bus = new EventBus(); propertyEvents.set(property, bus); }
-      return { on: (event, fn) => bus!.on(event as any, fn as any), off: (event, fn) => bus!.off(event as any, fn as any) };
-    };
+    const gravityExcludes = new Set<string>();
 
-    // Hierarchy: live `children` getter + helpers backed by HierarchyIndex.
-    const hi = this.hierarchy;
-    const all = this._all;
-    Object.defineProperty(ro, "children", {
-      configurable: true,
-      get: () => hi.childIds(id).map((cid) => all.get(cid)).filter(Boolean) as RuntimeObject[],
-    });
-    ro.findFirstChild = (name: string) => {
-      for (const cid of hi.childIds(id)) {
-        const c = all.get(cid);
-        if (c && c.name === name) return c;
-      }
-      return null;
-    };
-    ro.setParent = (parent: RuntimeObject | null) => {
-      hi.reparent(ro, parent ? parent.id : null);
-    };
-    hi.add(ro);
-
-    const proxy = new Proxy(ro, {
+    const proxy = new Proxy(raw, {
       set: (target, prop, value) => {
         const propName = prop as string;
         const oldValue = (target as any)[propName];
         if (oldValue !== value) {
           (target as any)[propName] = value;
+          // Fire property changed signals
           const propBus = propertyEvents.get(propName);
           if (propBus) propBus.emit("changed", [propName, value, oldValue]);
           const generalBus = this._objectEvents.get(id);
           if (generalBus) generalBus.emit("changed", [propName, value, oldValue]);
+          // Update auto-property tracking
+          if (["autoRotateY", "autoBob", "autoFollow", "autoSpin", "autoMove"].includes(propName)) {
+            if (value !== undefined) this._autoPropObjects.add(proxy);
+            else this._autoPropObjects.delete(proxy);
+          }
+          // If gravity property changes to true, ensure it has defaults
+          if (propName === "gravity" && value === true) {
+            (target as any).gravity = { strength: 9.81, radius: 30 };
+          }
         }
         return true;
       }
     });
-    this._all.set(id, proxy);
+
+    // Event methods
+    proxy.on = (event, fn) => {
+      let bus = this._objectEvents.get(id);
+      if (!bus) { bus = new EventBus(); this._objectEvents.set(id, bus); }
+      return bus.on(event as any, fn as any);
+    };
+    proxy.off = (event, fn) => {
+      this._objectEvents.get(id)?.off(event as any, fn as any);
+    };
+    proxy.GetPropertyChangedSignal = (property: string) => {
+      let bus = propertyEvents.get(property);
+      if (!bus) { bus = new EventBus(); propertyEvents.set(property, bus); }
+      return { on: (event: any, fn: any) => bus!.on(event, fn), off: (event: any, fn: any) => bus!.off(event, fn) };
+    };
+
+    // Gravity exclusion methods
+    proxy.excludeGravity = (source: RuntimeObject, exclude: boolean) => {
+      if (exclude) gravityExcludes.add(source.id);
+      else gravityExcludes.delete(source.id);
+    };
+    proxy.isExcludedFromGravity = (source: RuntimeObject) => gravityExcludes.has(source.id);
+
+    // Hierarchy integration
+    const hi = this.hierarchy;
+    const all = this._all;
+    Object.defineProperty(proxy, "children", {
+      get: () => hi.childIds(id).map(cid => all.get(cid)).filter(Boolean) as RuntimeObject[]
+    });
+    proxy.findFirstChild = (name: string) => {
+      for (const cid of hi.childIds(id)) {
+        const child = all.get(cid);
+        if (child && child.name === name) return child;
+      }
+      return null;
+    };
+    proxy.setParent = (parent: RuntimeObject | null) => {
+      hi.reparent(proxy, parent ? parent.id : null);
+      proxy.parentId = parent ? parent.id : null;
+    };
+    hi.add(proxy);
+
+    // Store excludes for internal use
+    (proxy as any)._gravityExcludes = gravityExcludes;
+
     return proxy;
   }
 
@@ -814,7 +843,7 @@ export class GameRuntime {
   }
 
   private createInternal(opts: { name?: string; primitiveType?: "cube" | "sphere" | "cylinder" | "plane"; container?: ContainerName; position?: Vec3; color?: string; parentId?: string | null; canCollide?: boolean; anchored?: boolean; }): RuntimeObject {
-    const ro: RuntimeObject = {
+    const raw: RuntimeObject = {
       id: newId(),
       name: opts.name ?? `Part_${this._all.size + 1}`,
       type: "primitive",
@@ -832,20 +861,27 @@ export class GameRuntime {
       on: () => () => {},
       off: () => {},
       parentId: opts.parentId ?? null,
-        children: [],
-        findFirstChild: () => null,
-        setParent: () => {},
-        GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+      children: [],
+      findFirstChild: () => null,
+      setParent: () => {},
+      GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+      excludeGravity: () => {},
+      isExcludedFromGravity: () => false,
     };
-    const proxiedRo = this.mountObjectEvents(ro);
-    this._all.set(ro.id, proxiedRo);
+    const ro = this.mountObjectEvents(raw);
+    this._all.set(ro.id, ro);
+    if (opts.parentId) {
+      const parent = this._all.get(opts.parentId);
+      if (parent) ro.setParent(parent);
+    }
     this.rebuildIndexes();
-    this._events.emit("objectAdded", [proxiedRo]);
-    return proxiedRo;
+    this._events.emit("objectAdded", [ro]);
+    if (this.hasAutoProperties(ro)) this._autoPropObjects.add(ro);
+    return ro;
   }
 
   private cloneTemplateInto(tpl: RuntimeObject, container: ContainerName, position?: Vec3): RuntimeObject {
-    const ro: RuntimeObject = {
+    const raw: RuntimeObject = {
       id: newId(),
       name: `${tpl.name}_${this._all.size + 1}`,
       type: tpl.type,
@@ -861,34 +897,36 @@ export class GameRuntime {
       transparency: tpl.transparency,
       mass: tpl.mass,
       friction: tpl.friction,
-      gravityEnabled: tpl.gravityEnabled,
-      gravityStrength: tpl.gravityStrength,
-      gravityRadius: tpl.gravityRadius,
+      gravity: tpl.gravity,
       velocity: { x: 0, y: 0, z: 0 },
       on: () => () => {},
       off: () => {},
       parentId: null,
-        children: [],
-        findFirstChild: () => null,
-        setParent: () => {},
-        GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+      children: [],
+      findFirstChild: () => null,
+      setParent: () => {},
+      GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+      excludeGravity: () => {},
+      isExcludedFromGravity: () => false,
     };
-    const proxiedRo = this.mountObjectEvents(ro);
-    this._all.set(ro.id, proxiedRo);
+    const ro = this.mountObjectEvents(raw);
+    this._all.set(ro.id, ro);
     this.rebuildIndexes();
-    this._events.emit("objectAdded", [proxiedRo]);
-    return proxiedRo;
+    this._events.emit("objectAdded", [ro]);
+    if (this.hasAutoProperties(ro)) this._autoPropObjects.add(ro);
+    return ro;
   }
 
   private removeObject(id: string) {
     const ro = this._all.get(id);
     if (!ro) return;
-    // Cascade destroy descendants so detached subtrees don't linger.
+    // Cascade destroy descendants
     for (const cid of this.hierarchy.descendantIds(id)) {
       const child = this._all.get(cid);
       if (!child) continue;
       this._all.delete(cid);
       this._playerContacts.delete(cid);
+      this._autoPropObjects.delete(child);
       this.emitObjectEvent(cid, "destroyed", []);
       this._objectEvents.delete(cid);
       this.hierarchy.remove(child);
@@ -896,6 +934,7 @@ export class GameRuntime {
     }
     this._all.delete(id);
     this._playerContacts.delete(id);
+    this._autoPropObjects.delete(ro);
     this.emitObjectEvent(id, "destroyed", []);
     this._objectEvents.delete(id);
     this.hierarchy.remove(ro);
@@ -958,10 +997,25 @@ export class GameRuntime {
 
     const log = (...args: any[]) => { const text = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" "); this.pushLog(text); };
     const find = (name: string): RuntimeObject | null => { const containers = [this.workspace, this.lighting, this.replicatedStorage, this.serverScriptService, this.starterPlayer, this.players]; for (const c of containers) if (c[name]) return c[name]; for (const o of this._all.values()) if (o.name === name) return o; return null; };
-    const create = (opts: Parameters<GameAPI["create"]>[0]): RuntimeObject => { const ro = this.createInternal({ name: opts.name, primitiveType: opts.primitiveType, container: this.normalizeContainer(opts.container), position: { x: 0, y: 0.5, z: 0, ...(opts.position ?? {}) } as Vec3, color: opts.color, parentId: opts.parent ? opts.parent.id : null, canCollide: opts.canCollide, anchored: opts.anchored }); if (opts.rotation) Object.assign(ro.rotation, opts.rotation); if (opts.scale) Object.assign(ro.scale, opts.scale); if (opts.type) ro.type = opts.type; return ro; };
+    const create = (opts: Parameters<GameAPI["create"]>[0]): RuntimeObject => {
+      const ro = this.createInternal({
+        name: opts.name,
+        primitiveType: opts.primitiveType,
+        container: this.normalizeContainer(opts.container),
+        position: { x: 0, y: 0.5, z: 0, ...(opts.position ?? {}) } as Vec3,
+        color: opts.color,
+        parentId: opts.parent ? opts.parent.id : null,
+        canCollide: opts.canCollide,
+        anchored: opts.anchored
+      });
+      if (opts.rotation) Object.assign(ro.rotation, opts.rotation);
+      if (opts.scale) Object.assign(ro.scale, opts.scale);
+      if (opts.type) ro.type = opts.type;
+      return ro;
+    };
     const raycastFn = (origin: Vec3, direction: Vec3, maxDistance = 100, params?: RaycastParams) => raycastWorld(this._all.values(), origin, direction, maxDistance, params);
     const networkApi = { server: this.network.server, client: this.network.client };
-    const spawn = (templateName: string, overrides?: Partial<RuntimeObject>): RuntimeObject | null => { const tpl = this.replicatedStorage[templateName]; if (!tpl) { this.pushLog(`spawn(): no ReplicatedStorage template named "${templateName}"`); return null; } const ro = this.cloneTemplateInto(tpl, "Workspace", overrides?.position ? { ...tpl.position, ...overrides.position } : undefined); if (overrides) { if (overrides.name) { ro.name = overrides.name; this.rebuildIndexes(); } if (overrides.rotation) Object.assign(ro.rotation, overrides.rotation); if (overrides.scale) Object.assign(ro.scale, overrides.scale); if (overrides.color != null) ro.color = overrides.color; if (overrides.visible != null) ro.visible = overrides.visible; if (overrides.anchored != null) ro.anchored = overrides.anchored; if (overrides.canCollide != null) ro.canCollide = overrides.canCollide; if (overrides.transparency != null) ro.transparency = overrides.transparency; if (overrides.mass != null) ro.mass = overrides.mass; if (overrides.friction != null) ro.friction = overrides.friction; if (overrides.gravityEnabled != null) ro.gravityEnabled = overrides.gravityEnabled; if (overrides.gravityStrength != null) ro.gravityStrength = overrides.gravityStrength; if (overrides.gravityRadius != null) ro.gravityRadius = overrides.gravityRadius; if (overrides.velocity) Object.assign(ro.velocity, overrides.velocity); } return ro; };
+    const spawn = (templateName: string, overrides?: Partial<RuntimeObject>): RuntimeObject | null => { const tpl = this.replicatedStorage[templateName]; if (!tpl) { this.pushLog(`spawn(): no ReplicatedStorage template named "${templateName}"`); return null; } const ro = this.cloneTemplateInto(tpl, "Workspace", overrides?.position ? { ...tpl.position, ...overrides.position } : undefined); if (overrides) { if (overrides.name) { ro.name = overrides.name; this.rebuildIndexes(); } if (overrides.rotation) Object.assign(ro.rotation, overrides.rotation); if (overrides.scale) Object.assign(ro.scale, overrides.scale); if (overrides.color != null) ro.color = overrides.color; if (overrides.visible != null) ro.visible = overrides.visible; if (overrides.anchored != null) ro.anchored = overrides.anchored; if (overrides.canCollide != null) ro.canCollide = overrides.canCollide; if (overrides.transparency != null) ro.transparency = overrides.transparency; if (overrides.mass != null) ro.mass = overrides.mass; if (overrides.friction != null) ro.friction = overrides.friction; if (overrides.gravity !== undefined) ro.gravity = overrides.gravity; if (overrides.velocity) Object.assign(ro.velocity, overrides.velocity); } return ro; };
     const destroy = (target: RuntimeObject | string) => { if (typeof target === "string") { for (const ro of this._all.values()) if (ro.name === target || ro.id === target) { this.removeObject(ro.id); this.rebuildIndexes(); return; } return; } this.removeObject(target.id); this.rebuildIndexes(); };
     const guiText = (id: string, text: string, opts?: Partial<Omit<GuiElement, "id" | "kind" | "text">>) => { const prev = this.gui.get(id); const el: GuiElement = { id, kind: "text", text, x: opts?.x ?? prev?.x ?? 0, y: opts?.y ?? prev?.y ?? 0, anchor: opts?.anchor ?? prev?.anchor ?? "tl", color: opts?.color ?? prev?.color ?? "#ffffff", size: opts?.size ?? prev?.size ?? 16, bg: opts?.bg ?? prev?.bg }; this.gui.set(id, el); this.guiVersion++; };
     const guiButton = (id: string, text: string, opts: Partial<Omit<GuiElement, "id" | "kind" | "text">> | undefined, onClick?: (game: GameAPI) => void) => { const prev = this.gui.get(id); const el: GuiElement = { id, kind: "button", text, x: opts?.x ?? prev?.x ?? 16, y: opts?.y ?? prev?.y ?? 16, anchor: opts?.anchor ?? prev?.anchor ?? "tl", color: opts?.color ?? prev?.color ?? "#ffffff", size: opts?.size ?? prev?.size ?? 14, bg: opts?.bg ?? prev?.bg ?? "rgba(30,40,60,0.85)", onClick: onClick ?? prev?.onClick }; this.gui.set(id, el); this.guiVersion++; };
@@ -1029,15 +1083,14 @@ export class GameRuntime {
   emitClick(objId: string | null) { const obj = objId ? (this._all.get(objId) ?? null) : null; if (obj) this.emitObjectEvent(obj.id, "clicked", [obj]); for (const fn of this._mouseClickHandlers) { try { fn(obj); } catch (e: any) { this.pushLog(`mouse.onClick error: ${formatErr(e)}`); } } }
   emitTap(objId: string) { this.emitObjectEvent(objId, "clicked", [this._all.get(objId)]); }
 
-  private async runScripts() { const api = this.buildApi(0); for (const s of this.scripts) { if (s.error) { this.pushLog(`[${s.name}] compile error: ${s.error}`); continue; } if (!s.run) continue; try { const maybe = (s.run as any)(api); if (maybe && typeof maybe.then === "function") maybe.then(undefined, (e: any) => this.pushLog(`[${s.name}] runtime error: ${formatErr(e)}`)); } catch (e: any) { this.pushLog(`[${s.name}] runtime error: ${formatErr(e)}`); } } }
+  private async runScripts() { const api = this.buildApi(0); for (const s of this.scripts) { if (s.error) { this.pushLog(`[${s.name}] compile error: ${s.error}`); continue; } if (!s.run) continue; try { const maybe = (s.run as any)(api); if (maybe && typeof maybe.then === "function") maybe.catch((e: any) => this.pushLog(`[${s.name}] runtime error: ${formatErr(e)}`)); } catch (e: any) { this.pushLog(`[${s.name}] runtime error: ${formatErr(e)}`); } } }
 
   start() { void this.runScripts(); this._events.emit("start", [], (e, fn) => this.pushLog(`internal start error: ${formatErr(e)}`)); this._events.emit("playerSpawned", [this.player], (e, fn) => this.pushLog(`internal playerSpawned error: ${formatErr(e)}`)); }
 
   stop() { this._events.emit("stop", [], () => {}); this._events.clear(); this._objectEvents.clear(); this._keyDownHandlers.clear(); this._keyUpHandlers.clear(); this._mouseClickHandlers.clear(); this._timers.length = 0; this._tweens.clear(); this.network.clear(); this.hierarchy.clear(); }
 
   private updateAutoProperties(dt: number) {
-    // Update auto-rotation and auto-spin for all objects
-    for (const o of this.objectList) {
+    for (const o of this._autoPropObjects) {
       if (o.autoRotateY !== undefined) o.rotation.y += o.autoRotateY * dt;
       if (o.autoSpin) {
         if (o.autoSpin.x) o.rotation.x += o.autoSpin.x * dt;
@@ -1070,37 +1123,104 @@ export class GameRuntime {
       }
     }
 
-    // Auto-face movement for player
-    if (this.player.autoFaceMovement !== false) {
+    // Player auto‑face movement
+    if (this.player.autoFaceMovement) {
       const inputMag = Math.hypot(this.input.moveX, this.input.moveZ);
       if (inputMag > 0.01) {
         const cf = this.cameraForward;
         const up = this.player.up;
         const cfDot = cf.x * up.x + cf.y * up.y + cf.z * up.z;
         let fx = cf.x - up.x * cfDot;
-        let fy = cf.y - up.y * cfDot;
         let fz = cf.z - up.z * cfDot;
-        let fLen = Math.hypot(fx, fy, fz);
-        if (fLen < 0.0001) {
-          const fallback = Math.abs(up.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
-          const fbDot = fallback.x * up.x + fallback.y * up.y + fallback.z * up.z;
-          fx = fallback.x - up.x * fbDot;
-          fy = fallback.y - up.y * fbDot;
-          fz = fallback.z - up.z * fbDot;
-          fLen = Math.hypot(fx, fy, fz) || 1;
+        const len = Math.hypot(fx, fz);
+        if (len > 0.001) { fx /= len; fz /= len; }
+        const targetYaw = Math.atan2(this.input.moveX, this.input.moveZ);
+        let diff = targetYaw - this.player.rotation.y;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        this.player.rotation.y += diff * Math.min(1, dt * 12);
+      }
+    }
+  }
+
+  private computeGravity(point: Vec3, excludeId?: string, excludedSources?: Set<string>): Vec3 {
+    let bestMag = 0, best: Vec3 | null = null;
+    for (const o of this.objectList) {
+      if (o.id === excludeId) continue;
+      if (excludedSources && excludedSources.has(o.id)) continue;
+      let gravityCfg = o.gravity;
+      if (gravityCfg === false) continue;
+      if (gravityCfg === true) gravityCfg = { strength: 9.81, radius: 30 };
+      const strength = gravityCfg.strength;
+      const radius = gravityCfg.radius;
+      const { surfaceDistance, dirToCenter, surfaceRadius } = pointVsObjectSurface(point, o);
+      if (surfaceDistance > radius) continue;
+      const r = Math.max(surfaceRadius, surfaceRadius + Math.max(0, surfaceDistance));
+      const accel = (strength * surfaceRadius * surfaceRadius) / (r * r);
+      if (accel > bestMag) { bestMag = accel; best = { x: dirToCenter.x * accel, y: dirToCenter.y * accel, z: dirToCenter.z * accel }; }
+    }
+    return best || { x: 0, y: -(this.physics.gravity || 9.81), z: 0 };
+  }
+
+  private resolvePlayerVsObject(o: RuntimeObject) {
+    const p = this.player;
+    const pr = 0.4, ph = 0.9;
+    if (o.primitiveType === "sphere") {
+      const r = Math.max(o.scale.x, o.scale.y, o.scale.z) * 0.5;
+      const dx = p.position.x - o.position.x, dy = p.position.y - o.position.y, dz = p.position.z - o.position.z;
+      const dist = Math.hypot(dx, dy, dz);
+      const minDist = r + pr;
+      if (dist < minDist && dist > 0.0001) {
+        const nx = dx / dist, ny = dy / dist, nz = dz / dist;
+        const push = minDist - dist;
+        p.position.x += nx * push; p.position.y += ny * push; p.position.z += nz * push;
+        const vDotN = p.velocity.x * nx + p.velocity.y * ny + p.velocity.z * nz;
+        if (vDotN < 0) {
+          p.velocity.x -= nx * vDotN;
+          p.velocity.y -= ny * vDotN;
+          p.velocity.z -= nz * vDotN;
+          // Push object back if it's dynamic
+          if (!o.anchored) {
+            const massRatio = o.mass / (p.mass ?? 1);
+            o.velocity.x += nx * vDotN * massRatio;
+            o.velocity.y += ny * vDotN * massRatio;
+            o.velocity.z += nz * vDotN * massRatio;
+          }
         }
-        fx /= fLen; fy /= fLen; fz /= fLen;
-        const rx = fy * up.z - fz * up.y;
-        const rz = fx * up.y - fy * up.x;
-        const wantX = rx * this.input.moveX - fx * this.input.moveZ;
-        const wantZ = rz * this.input.moveX - fz * this.input.moveZ;
-        const moveMag = Math.hypot(wantX, wantZ);
-        if (moveMag > 0.0001) {
-          const targetYaw = Math.atan2(wantX, wantZ);
-          let diff = targetYaw - this.player.rotation.y;
-          while (diff > Math.PI) diff -= Math.PI * 2;
-          while (diff < -Math.PI) diff += Math.PI * 2;
-          this.player.rotation.y += diff * Math.min(1, dt * 12);
+        if (nx * p.up.x + ny * p.up.y + nz * p.up.z > 0.5) p.onGround = true;
+      }
+      return;
+    }
+    // Box collision
+    const halfX = (o.scale.x || 1) * 0.5 + pr, halfY = (o.scale.y || 1) * 0.5 + ph, halfZ = (o.scale.z || 1) * 0.5 + pr;
+    const dx = p.position.x - o.position.x, dy = p.position.y - o.position.y, dz = p.position.z - o.position.z;
+    if (Math.abs(dx) < halfX && Math.abs(dy) < halfY && Math.abs(dz) < halfZ) {
+      const overlapX = halfX - Math.abs(dx), overlapY = halfY - Math.abs(dy), overlapZ = halfZ - Math.abs(dz);
+      let nx = 0, ny = 0, nz = 0, overlap = 0;
+      if (overlapY < overlapX && overlapY < overlapZ) {
+        overlap = overlapY;
+        ny = dy > 0 ? 1 : -1;
+        if (ny > 0) { p.onGround = true; }
+      } else if (overlapX < overlapZ) {
+        overlap = overlapX;
+        nx = dx > 0 ? 1 : -1;
+      } else {
+        overlap = overlapZ;
+        nz = dz > 0 ? 1 : -1;
+      }
+      p.position.x += nx * overlap;
+      p.position.y += ny * overlap;
+      p.position.z += nz * overlap;
+      const vDotN = p.velocity.x * nx + p.velocity.y * ny + p.velocity.z * nz;
+      if (vDotN < 0) {
+        p.velocity.x -= vDotN * nx;
+        p.velocity.y -= vDotN * ny;
+        p.velocity.z -= vDotN * nz;
+        if (!o.anchored) {
+          const massRatio = o.mass / (p.mass ?? 1);
+          o.velocity.x += nx * vDotN * massRatio;
+          o.velocity.y += ny * vDotN * massRatio;
+          o.velocity.z += nz * vDotN * massRatio;
         }
       }
     }
@@ -1129,11 +1249,9 @@ export class GameRuntime {
 
     // ========== ANIMATION PHASE ==========
     this._tweens.step(dt);
-    this.updateAutoProperties(dt);
     this._events.emit("animation", [dt, this.time], (e, fn) => this.pushLog(`runService.animation error: ${formatErr(e)}`));
 
     // ========== REPLICATION PHASE ==========
-    // Server-authoritative replication: push input up, broadcast snapshots down.
     this.network.step(dt, this.player, this.objectList, {
       t: this.time,
       moveX: this.input.moveX,
@@ -1144,7 +1262,11 @@ export class GameRuntime {
     this._events.emit("replication", [dt, this.time], (e, fn) => this.pushLog(`runService.replication error: ${formatErr(e)}`));
 
     // ========== PHYSICS PHASE ==========
-    const gravityVec = this.computeGravity(p.position);
+    // Update auto‑properties that affect position/movement (after tweens, before physics)
+    this.updateAutoProperties(dt);
+
+    const playerExcludes = (p as any)._gravityExcludes as Set<string> | undefined;
+    const gravityVec = this.computeGravity(p.position, undefined, playerExcludes);
     const gMag = Math.hypot(gravityVec.x, gravityVec.y, gravityVec.z);
     const desiredUp = gMag > 0.001 ? { x: -gravityVec.x / gMag, y: -gravityVec.y / gMag, z: -gravityVec.z / gMag } : { x: 0, y: 1, z: 0 };
     const slerpT = Math.min(1, dt * 6);
@@ -1194,9 +1316,11 @@ export class GameRuntime {
     p.position.y += p.velocity.y * dt;
     p.position.z += p.velocity.z * dt;
 
+    // Object movement & gravity
     for (const o of this.objectList) {
       if (o.anchored || o.container !== "Workspace") continue;
-      const og = this.computeGravity(o.position, o.id);
+      const excludes = (o as any)._gravityExcludes as Set<string> | undefined;
+      const og = this.computeGravity(o.position, o.id, excludes);
       o.velocity.x += og.x * dt;
       o.velocity.y += og.y * dt;
       o.velocity.z += og.z * dt;
@@ -1205,6 +1329,7 @@ export class GameRuntime {
       o.position.z += o.velocity.z * dt;
     }
 
+    // Player vs object collisions (with impulse exchange)
     for (const o of this.objectList) {
       if (!o.visible || !o.canCollide) continue;
       if (o.type === "light" || o.type === "spawn") continue;
@@ -1224,7 +1349,7 @@ export class GameRuntime {
     } else if (p.position.y > 1.001) p.onGround = false;
 
     this.runTouchSweep();
-    // Object-vs-object collisions (honors canCollide on BOTH parties).
+    // Object-vs-object collisions (handles both sides)
     resolveObjectCollisions(this.objectList);
     this._events.emit("physics", [dt, this.time], (e, fn) => this.pushLog(`runService.physics error: ${formatErr(e)}`));
 
@@ -1269,51 +1394,11 @@ export class GameRuntime {
     }
     for (const id of this._playerContacts) if (!seenThisFrame.has(id)) { this._playerContacts.delete(id); this.emitObjectEvent(id, "untouched", [p, this._all.get(id)]); }
   }
-
-  private computeGravity(point: Vec3, excludeId?: string): Vec3 {
-    let bestMag = 0, best: Vec3 | null = null;
-    for (const o of this.objectList) {
-      if (!o.gravityEnabled || o.id === excludeId) continue;
-      const { surfaceDistance, dirToCenter, surfaceRadius } = pointVsObjectSurface(point, o);
-      if (surfaceDistance > o.gravityRadius) continue;
-      const r = Math.max(surfaceRadius, surfaceRadius + Math.max(0, surfaceDistance));
-      const accel = (o.gravityStrength * surfaceRadius * surfaceRadius) / (r * r);
-      if (accel > bestMag) { bestMag = accel; best = { x: dirToCenter.x * accel, y: dirToCenter.y * accel, z: dirToCenter.z * accel }; }
-    }
-    return best || { x: 0, y: -(this.physics.gravity || 9.81), z: 0 };
-  }
-
-  private resolvePlayerVsObject(o: RuntimeObject) {
-    const p = this.player;
-    const pr = 0.4, ph = 0.9;
-    if (o.primitiveType === "sphere") {
-      const r = Math.max(o.scale.x, o.scale.y, o.scale.z) * 0.5;
-      const dx = p.position.x - o.position.x, dy = p.position.y - o.position.y, dz = p.position.z - o.position.z;
-      const dist = Math.hypot(dx, dy, dz);
-      const minDist = r + pr;
-      if (dist < minDist && dist > 0.0001) {
-        const nx = dx / dist, ny = dy / dist, nz = dz / dist;
-        const push = minDist - dist;
-        p.position.x += nx * push; p.position.y += ny * push; p.position.z += nz * push;
-        const vDotN = p.velocity.x * nx + p.velocity.y * ny + p.velocity.z * nz;
-        if (vDotN < 0) { p.velocity.x -= nx * vDotN; p.velocity.y -= ny * vDotN; p.velocity.z -= nz * vDotN; }
-        if (nx * p.up.x + ny * p.up.y + nz * p.up.z > 0.5) p.onGround = true;
-      }
-      return;
-    }
-    const halfX = (o.scale.x || 1) * 0.5 + pr, halfY = (o.scale.y || 1) * 0.5 + ph, halfZ = (o.scale.z || 1) * 0.5 + pr;
-    const dx = p.position.x - o.position.x, dy = p.position.y - o.position.y, dz = p.position.z - o.position.z;
-    if (Math.abs(dx) < halfX && Math.abs(dy) < halfY && Math.abs(dz) < halfZ) {
-      const overlapX = halfX - Math.abs(dx), overlapY = halfY - Math.abs(dy), overlapZ = halfZ - Math.abs(dz);
-      if (overlapY < overlapX && overlapY < overlapZ) {
-        if (dy > 0) { p.position.y = o.position.y + halfY; if (p.velocity.y < 0) p.velocity.y = 0; if (p.up.y > 0.5) p.onGround = true; }
-        else { p.position.y = o.position.y - halfY; if (p.velocity.y > 0) p.velocity.y = 0; }
-      } else if (overlapX < overlapZ) { p.position.x += dx >= 0 ? overlapX : -overlapX; p.velocity.x = 0; if (Math.abs(p.up.x) > 0.5) p.onGround = true; }
-      else { p.position.z += dz >= 0 ? overlapZ : -overlapZ; p.velocity.z = 0; if (Math.abs(p.up.z) > 0.5) p.onGround = true; }
-    }
-  }
 }
 
+// ----------------------------------------------------------------------
+//  DEFAULT SCRIPT AND DOCS (unchanged, kept for reference)
+// ----------------------------------------------------------------------
 export const DEFAULT_SCRIPT = `// Welcome! Clean, consistent API - just .on(fn) for everything!
 
 // ========== RUNSERVICE - SIMPLE .ON(FN) API ==========
@@ -1415,6 +1500,17 @@ runService.update.on(() => {
   if (hit) log("ground:", hit.object.name, "@", hit.distance.toFixed(2));
 });
 
+// ========== GRAVITY SOURCES ==========
+// Create a planet with gravity
+const planet = create({ primitiveType: "sphere", position: { x: 10, y: 5, z: 0 }, scale: { x: 2, y: 2, z: 2 }, color: "#88aaff" });
+planet.gravity = true;  // default strength 9.81, radius 30
+// Or custom: planet.gravity = { strength: 9.1, radius: 40 };
+
+// Exclude specific objects from this planet's gravity
+player.excludeGravity(planet, true);
+someOtherObject.excludeGravity(planet, true);
+// Re-enable: player.excludeGravity(planet, false);
+
 // ========== REPLICATION (server-authoritative stub) ==========
 // Server side: receive client input, broadcast snapshots automatically.
 network.server.on("__input", (msg) => { /* msg.moveX, msg.jump, ... */ });
@@ -1478,6 +1574,26 @@ obj.autoMove = { direction: { x: 1, y: 0, z: 0 }, speed: 2 };
 player.autoFaceMovement = true;
 \`\`\`
 
+## 🌍 Gravity Sources
+
+Objects can have their own gravity fields:
+
+\`\`\`js
+// Create a planet with gravity
+const planet = create({ primitiveType: "sphere", position: { x: 10, y: 5, z: 0 }, scale: { x: 2, y: 2, z: 2 } });
+planet.gravity = true;  // Default: strength 9.81, radius 30
+
+// Custom gravity
+planet.gravity = { strength: 9.1, radius: 40 };
+
+// Exclude specific objects from this gravity source
+player.excludeGravity(planet, true);
+someBlock.excludeGravity(planet, true);
+
+// Re-enable
+player.excludeGravity(planet, false);
+\`\`\`
+
 ## 🎮 Complete Example
 
 \`\`\`js
@@ -1521,7 +1637,7 @@ log("Game ready! Everything else is automatic!");
 ## 📝 Notes
 
 - Each phase automatically receives (dt, time) parameters
-- Auto-properties run during the ANIMATION phase
+- Auto-properties run during the PHYSICS phase (so they integrate with collisions)
 - The engine handles all physics and collisions automatically
 - Use \`runService.update.on(fn)\` for game logic (most common)
 
