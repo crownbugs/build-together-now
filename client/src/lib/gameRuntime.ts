@@ -420,6 +420,8 @@ export function compileScript(code: string, name: string): CompiledScript {
        const dist = game.dist;
        const lerp = game.lerp;
        const clamp = game.clamp;
+       const raycast = game.raycast;
+       const network = game.network;
        const console = {
          log:   (...a) => game.log(...a),
          info:  (...a) => game.log("[info]", ...a),
@@ -1031,7 +1033,7 @@ export class GameRuntime {
 
   start() { void this.runScripts(); this._events.emit("start", [], (e, fn) => this.pushLog(`internal start error: ${formatErr(e)}`)); this._events.emit("playerSpawned", [this.player], (e, fn) => this.pushLog(`internal playerSpawned error: ${formatErr(e)}`)); }
 
-  stop() { this._events.emit("stop", [], () => {}); this._events.clear(); this._objectEvents.clear(); this._keyDownHandlers.clear(); this._keyUpHandlers.clear(); this._mouseClickHandlers.clear(); this._timers.length = 0; this._tweens.clear(); }
+  stop() { this._events.emit("stop", [], () => {}); this._events.clear(); this._objectEvents.clear(); this._keyDownHandlers.clear(); this._keyUpHandlers.clear(); this._mouseClickHandlers.clear(); this._timers.length = 0; this._tweens.clear(); this.network.clear(); this.hierarchy.clear(); }
 
   private updateAutoProperties(dt: number) {
     // Update auto-rotation and auto-spin for all objects
@@ -1131,6 +1133,14 @@ export class GameRuntime {
     this._events.emit("animation", [dt, this.time], (e, fn) => this.pushLog(`runService.animation error: ${formatErr(e)}`));
 
     // ========== REPLICATION PHASE ==========
+    // Server-authoritative replication: push input up, broadcast snapshots down.
+    this.network.step(dt, this.player, this.objectList, {
+      t: this.time,
+      moveX: this.input.moveX,
+      moveZ: this.input.moveZ,
+      jump: this.input.jump,
+      keys: { ...this.input.keys },
+    });
     this._events.emit("replication", [dt, this.time], (e, fn) => this.pushLog(`runService.replication error: ${formatErr(e)}`));
 
     // ========== PHYSICS PHASE ==========
@@ -1214,6 +1224,8 @@ export class GameRuntime {
     } else if (p.position.y > 1.001) p.onGround = false;
 
     this.runTouchSweep();
+    // Object-vs-object collisions (honors canCollide on BOTH parties).
+    resolveObjectCollisions(this.objectList);
     this._events.emit("physics", [dt, this.time], (e, fn) => this.pushLog(`runService.physics error: ${formatErr(e)}`));
 
     // ========== RENDER PHASE ==========
