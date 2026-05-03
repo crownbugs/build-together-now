@@ -318,21 +318,22 @@ export type CompiledScript = {
 };
 
 // ----------------------------------------------------------------------
-//  FIXED SAFE EVALUATION – no 'with', uses strict mode friendly function
+//  SAFE SCRIPT EVALUATION (no 'with', strict‑mode compliant)
 // ----------------------------------------------------------------------
 function safeEval(code: string, context: Record<string, any>): (api: GameAPI) => void {
-  // List all safe names we want to inject as parameters
-  const safeNames = ["game", "objects", "workspace", "lighting", "replicatedStorage", "serverScriptService", "starterPlayer", "players", "player", "input", "physics", "state", "runService", "keyboard", "mouse", "world", "gui", "log", "inventory", "find", "spawn", "create", "destroy", "onKey", "onUpdate", "every", "after", "wait", "now", "random", "randInt", "pick", "dist", "lerp", "clamp", "raycast", "network", "console"];
-  const paramNames = [...safeNames];
-  const paramValues = paramNames.map(name => context[name]);
-  // Wrap the code to prevent access to dangerous globals
+  const safeNames = [
+    "game", "objects", "workspace", "lighting", "replicatedStorage", "serverScriptService",
+    "starterPlayer", "players", "player", "input", "physics", "state", "runService",
+    "keyboard", "mouse", "world", "gui", "log", "inventory", "find", "spawn", "create",
+    "destroy", "onKey", "onUpdate", "every", "after", "wait", "now", "random", "randInt",
+    "pick", "dist", "lerp", "clamp", "raycast", "network", "console"
+  ];
   const wrappedCode = `"use strict";
-    return (function(${paramNames.join(',')}) {
+    return (function(${safeNames.join(',')}) {
       ${code}
     }).apply(null, arguments);
   `;
   const factory = new Function(wrappedCode);
-  // We'll return a function that takes a GameAPI and executes the script with that api as 'game'
   return (api: GameAPI) => {
     const ctx: any = {
       game: api,
@@ -374,7 +375,7 @@ function safeEval(code: string, context: Record<string, any>): (api: GameAPI) =>
       network: api.network,
       console: { log: api.log, info: (...a: any[]) => api.log("[info]", ...a), warn: (...a: any[]) => api.log("[warn]", ...a), error: (...a: any[]) => api.log("[error]", ...a) },
     };
-    const args = paramNames.map(p => ctx[p]);
+    const args = safeNames.map(p => ctx[p]);
     factory(...args);
   };
 }
@@ -680,33 +681,702 @@ export class GameRuntime {
     };
   }
 
-  private mountPlayerInventory() { /* same as before, omitted for brevity but unchanged */ }
-  private mountPlayerMethods() { /* same as before */ }
-  private hasAutoProperties(o: RuntimeObject): boolean { /* unchanged */ }
-  private mountObjectEvents(raw: RuntimeObject): RuntimeObject { /* unchanged except for gravity assignment already done */ }
-  private emitObjectEvent(id: string, event: ObjectEventName, args: any[]) { /* unchanged */ }
-  private createInternal(opts: any): RuntimeObject { /* unchanged */ }
-  private cloneTemplateInto(tpl: RuntimeObject, container: ContainerName, position?: Vec3): RuntimeObject { /* unchanged */ }
-  private removeObject(id: string) { /* unchanged */ }
-  private runPickupSweep() { /* unchanged */ }
-  private rebuildIndexes() { /* unchanged */ }
-  private pushLog(line: string) { /* unchanged */ }
-  private buildState(): RuntimeState { /* unchanged */ }
-  invokeGuiClick(id: string) { /* unchanged */ }
-  private buildApi(dt: number): GameAPI { /* unchanged except no changes needed */ }
-  emitClick(objId: string | null) { /* unchanged */ }
-  emitTap(objId: string) { /* unchanged */ }
-  private async runScripts() { /* unchanged */ }
-  start() { /* unchanged */ }
-  stop() { /* unchanged */ }
-  private updateAutoProperties(dt: number) { /* unchanged */ }
-  step(dt: number) { /* unchanged */ }
-  private runTouchSweep() { /* unchanged */ }
-  private computeGravity(point: Vec3, subject: RuntimeObject | RuntimePlayer): Vec3 { /* unchanged */ }
-  private resolvePlayerVsObject(o: RuntimeObject) { /* unchanged */ }
+  private mountPlayerInventory() {
+    const items: InventoryItem[] = [];
+    let equippedId: string | null = null;
+    const inv = this.player.inventory as any;
+    Object.defineProperty(inv, "items", { value: items, writable: false, configurable: true });
+    Object.defineProperty(inv, "equipped", { get: () => items.find(i => i.id === equippedId) ?? null, configurable: true });
+
+    inv.add = (name: string, opts?: { count?: number; template?: string; data?: Record<string, any> }): InventoryItem | null => {
+      const count = Math.max(1, Math.floor(opts?.count ?? 1));
+      const existing = items.find(i => i.name === name);
+      if (existing) {
+        existing.count += count;
+        if (opts?.data) Object.assign(existing.data, opts.data);
+        if (opts?.template && !existing.template) existing.template = opts.template;
+        return existing;
+      }
+      if (items.length >= inv.maxSlots) {
+        this.pushLog(`inventory.add("${name}"): inventory full (${inv.maxSlots} slots)`);
+        return null;
+      }
+      const slot: InventoryItem = { id: newId(), name, count, template: opts?.template, data: { ...(opts?.data ?? {}) } };
+      items.push(slot);
+      return slot;
+    };
+
+    inv.remove = (name: string, count: number = 1): number => {
+      const idx = items.findIndex(i => i.name === name);
+      if (idx < 0) return 0;
+      const slot = items[idx];
+      const removed = Math.min(slot.count, Math.max(1, Math.floor(count)));
+      slot.count -= removed;
+      if (slot.count <= 0) {
+        if (slot.id === equippedId) equippedId = null;
+        items.splice(idx, 1);
+      }
+      return removed;
+    };
+
+    inv.has = (name: string, count: number = 1): boolean => (items.find(i => i.name === name)?.count ?? 0) >= count;
+    inv.get = (name: string): InventoryItem | null => items.find(i => i.name === name) ?? null;
+    inv.equip = (name: string | null): boolean => {
+      if (name == null) { equippedId = null; return true; }
+      const slot = items.find(i => i.name === name);
+      if (!slot) return false;
+      equippedId = slot.id;
+      return true;
+    };
+    inv.drop = (name: string, count: number = 1): RuntimeObject | null => {
+      const slot = items.find(i => i.name === name);
+      if (!slot) return null;
+      const dropped = inv.remove(name, count);
+      if (dropped <= 0) return null;
+      const fwd = this.cameraForward;
+      const fLen = Math.hypot(fwd.x, 0, fwd.z) || 1;
+      const fx = fwd.x / fLen;
+      const fz = fwd.z / fLen;
+      const dropPos: Vec3 = { x: this.player.position.x + fx * 1.5, y: this.player.position.y + 0.5, z: this.player.position.z + fz * 1.5 };
+      const tpl = this.replicatedStorage[slot.template ?? name];
+      let ro: RuntimeObject;
+      if (tpl) ro = this.cloneTemplateInto(tpl, "Workspace", dropPos);
+      else ro = this.createInternal({ name, primitiveType: "cube", container: "Workspace", position: dropPos, color: "#c084fc" });
+      ro.isPickup = true;
+      ro.pickupName = name;
+      ro.pickupData = { ...slot.data };
+      return ro;
+    };
+    inv.clear = () => { items.length = 0; equippedId = null; };
+  }
+
+  private mountPlayerMethods() {
+    const p = this.player;
+    p.takeDamage = (n: number) => { p.health = Math.max(0, p.health - n); if (p.health <= 0) p.respawn(); };
+    p.heal = (n: number) => { p.health = Math.min(p.maxHealth, p.health + n); };
+    p.teleport = (x: number, y: number, z: number) => { p.position.x = x; p.position.y = y; p.position.z = z; p.velocity.x = 0; p.velocity.y = 0; p.velocity.z = 0; };
+    p.respawn = () => { 
+      const sp = p.spawnPoint;
+      p.position.x = sp.x; p.position.y = sp.y; p.position.z = sp.z;
+      p.velocity.x = 0; p.velocity.y = 0; p.velocity.z = 0;
+      p.health = p.maxHealth;
+      this.pushLog(`${p.username} respawned.`);
+    };
+  }
+
+  private hasAutoProperties(o: RuntimeObject): boolean {
+    return !!(o.autoRotateY || o.autoBob || o.autoFollow || o.autoSpin || o.autoMove);
+  }
+
+  private mountObjectEvents(raw: RuntimeObject): RuntimeObject {
+    const id = raw.id;
+    const propertyEvents = new Map<string, EventBus<Record<"changed", [property: string, newValue: any, oldValue: any]>>>();
+
+    const proxy = new Proxy(raw, {
+      set: (target, prop, value) => {
+        const propName = prop as string;
+        const oldValue = (target as any)[propName];
+        if (oldValue !== value) {
+          (target as any)[propName] = value;
+          const propBus = propertyEvents.get(propName);
+          if (propBus) propBus.emit("changed", [propName, value, oldValue]);
+          const generalBus = this._objectEvents.get(id);
+          if (generalBus) generalBus.emit("changed", [propName, value, oldValue]);
+          if (["autoRotateY", "autoBob", "autoFollow", "autoSpin", "autoMove"].includes(propName)) {
+            if (value !== undefined) this._autoPropObjects.add(proxy);
+            else this._autoPropObjects.delete(proxy);
+          }
+          if (propName === "gravity") {
+            if (typeof value === "boolean") {
+              (target as any)._gravitySource.enabled = value;
+            } else if (value && typeof value === "object") {
+              if (value.enabled !== undefined) (target as any)._gravitySource.enabled = value.enabled;
+              if (value.strength !== undefined) (target as any)._gravitySource.strength = value.strength;
+              if (value.radius !== undefined) (target as any)._gravitySource.radius = value.radius;
+            }
+          }
+        }
+        return true;
+      }
+    });
+
+    proxy.on = (event, fn) => {
+      let bus = this._objectEvents.get(id);
+      if (!bus) { bus = new EventBus(); this._objectEvents.set(id, bus); }
+      return bus.on(event as any, fn as any);
+    };
+    proxy.off = (event, fn) => {
+      this._objectEvents.get(id)?.off(event as any, fn as any);
+    };
+    proxy.GetPropertyChangedSignal = (property: string) => {
+      let bus = propertyEvents.get(property);
+      if (!bus) { bus = new EventBus(); propertyEvents.set(property, bus); }
+      return { on: (event: any, fn: any) => bus!.on(event, fn), off: (event: any, fn: any) => bus!.off(event, fn) };
+    };
+
+    const hi = this.hierarchy;
+    const all = this._all;
+    Object.defineProperty(proxy, "children", {
+      get: () => hi.childIds(id).map(cid => all.get(cid)).filter(Boolean) as RuntimeObject[]
+    });
+    proxy.findFirstChild = (name: string) => {
+      for (const cid of hi.childIds(id)) {
+        const child = all.get(cid);
+        if (child && child.name === name) return child;
+      }
+      return null;
+    };
+    proxy.setParent = (parent: RuntimeObject | null) => {
+      hi.reparent(proxy, parent ? parent.id : null);
+      proxy.parentId = parent ? parent.id : null;
+    };
+    hi.add(proxy);
+
+    return proxy;
+  }
+
+  private emitObjectEvent(id: string, event: ObjectEventName, args: any[]) {
+    const bus = this._objectEvents.get(id);
+    if (!bus) return;
+    bus.emit(event as any, args, (e, fn) => this.pushLog(`obj.on("${event}") error: ${formatErr(e)}`));
+  }
+
+  private createInternal(opts: { name?: string; primitiveType?: "cube" | "sphere" | "cylinder" | "plane"; container?: ContainerName; position?: Vec3; color?: string; parentId?: string | null; canCollide?: boolean; anchored?: boolean; gravity?: boolean | { enabled?: boolean; strength?: number; radius?: number } }): RuntimeObject {
+    const gravityInput = opts.gravity !== undefined ? opts.gravity : false;
+    const gravitySource = typeof gravityInput === 'boolean' ? { enabled: gravityInput, strength: 9.81, radius: 30 } : { enabled: gravityInput?.enabled ?? false, strength: gravityInput?.strength ?? 9.81, radius: gravityInput?.radius ?? 30 };
+    const raw: RuntimeObject = {
+      id: newId(),
+      name: opts.name ?? `Part_${this._all.size + 1}`,
+      type: "primitive",
+      primitiveType: opts.primitiveType ?? "cube",
+      container: opts.container ?? "Workspace",
+      position: { x: 0, y: 0.5, z: 0, ...(opts.position ?? {}) },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      color: opts.color ?? "#88aaff",
+      visible: true,
+      anchored: opts.anchored ?? false,
+      canCollide: opts.canCollide ?? true,
+      transparency: 0,
+      mass: 1,
+      friction: 0.4,
+      velocity: { x: 0, y: 0, z: 0 },
+      on: () => () => {},
+      off: () => {},
+      parentId: opts.parentId ?? null,
+      children: [],
+      findFirstChild: () => null,
+      setParent: () => {},
+      GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+      _gravitySource: gravitySource,
+      _gravityExclude: new Map(),
+    };
+    (raw as any).gravity = createGravityProxy(raw._gravitySource, raw._gravityExclude);
+    const ro = this.mountObjectEvents(raw);
+    this._all.set(ro.id, ro);
+    if (opts.parentId) {
+      const parent = this._all.get(opts.parentId);
+      if (parent) ro.setParent(parent);
+    }
+    this.rebuildIndexes();
+    this._events.emit("objectAdded", [ro]);
+    if (this.hasAutoProperties(ro)) this._autoPropObjects.add(ro);
+    return ro;
+  }
+
+  private cloneTemplateInto(tpl: RuntimeObject, container: ContainerName, position?: Vec3): RuntimeObject {
+    const raw: RuntimeObject = {
+      id: newId(),
+      name: `${tpl.name}_${this._all.size + 1}`,
+      type: tpl.type,
+      primitiveType: tpl.primitiveType,
+      container,
+      position: position ? { ...position } : { ...tpl.position },
+      rotation: { ...tpl.rotation },
+      scale: { ...tpl.scale },
+      color: tpl.color,
+      visible: true,
+      anchored: tpl.anchored,
+      canCollide: tpl.canCollide,
+      transparency: tpl.transparency,
+      mass: tpl.mass,
+      friction: tpl.friction,
+      velocity: { x: 0, y: 0, z: 0 },
+      on: () => () => {},
+      off: () => {},
+      parentId: null,
+      children: [],
+      findFirstChild: () => null,
+      setParent: () => {},
+      GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+      _gravitySource: { ...(tpl as any)._gravitySource },
+      _gravityExclude: new Map(),
+    };
+    (raw as any).gravity = createGravityProxy(raw._gravitySource, raw._gravityExclude);
+    const ro = this.mountObjectEvents(raw);
+    this._all.set(ro.id, ro);
+    this.rebuildIndexes();
+    this._events.emit("objectAdded", [ro]);
+    if (this.hasAutoProperties(ro)) this._autoPropObjects.add(ro);
+    return ro;
+  }
+
+  private removeObject(id: string) {
+    const ro = this._all.get(id);
+    if (!ro) return;
+    for (const cid of this.hierarchy.descendantIds(id)) {
+      const child = this._all.get(cid);
+      if (!child) continue;
+      this._all.delete(cid);
+      this._playerContacts.delete(cid);
+      this._autoPropObjects.delete(child);
+      this.emitObjectEvent(cid, "destroyed", []);
+      this._objectEvents.delete(cid);
+      this.hierarchy.remove(child);
+      this._events.emit("objectRemoved", [child]);
+    }
+    this._all.delete(id);
+    this._playerContacts.delete(id);
+    this._autoPropObjects.delete(ro);
+    this.emitObjectEvent(id, "destroyed", []);
+    this._objectEvents.delete(id);
+    this.hierarchy.remove(ro);
+    this._events.emit("objectRemoved", [ro]);
+  }
+
+  private runPickupSweep() {
+    const p = this.player;
+    const radius = 1.0;
+    let removed = false;
+    for (const o of this.objectList) {
+      if (!o.isPickup) continue;
+      if (Math.hypot(p.position.x - o.position.x, p.position.y - o.position.y, p.position.z - o.position.z) > radius) continue;
+      const slot = p.inventory.add(o.pickupName ?? o.name, { template: o.name, data: o.pickupData ?? {} });
+      if (slot) { this.pushLog(`Picked up ${o.pickupName ?? o.name}.`); this.removeObject(o.id); removed = true; }
+    }
+    if (removed) this.rebuildIndexes();
+  }
+
+  private rebuildIndexes() {
+    const ws = this.workspace, lt = this.lighting, rs = this.replicatedStorage, sss = this.serverScriptService, sp = this.starterPlayer, pl = this.players;
+    for (const k of Object.keys(ws)) delete ws[k];
+    for (const k of Object.keys(lt)) delete lt[k];
+    for (const k of Object.keys(rs)) delete rs[k];
+    for (const k of Object.keys(sss)) delete sss[k];
+    for (const k of Object.keys(sp)) delete sp[k];
+    for (const k of Object.keys(pl)) delete pl[k];
+    const list: RuntimeObject[] = [];
+    for (const ro of this._all.values()) {
+      switch (ro.container) {
+        case "Workspace": ws[ro.name] = ro; list.push(ro); break;
+        case "Lighting": lt[ro.name] = ro; list.push(ro); break;
+        case "ReplicatedStorage": rs[ro.name] = ro; break;
+        case "ServerScriptService": sss[ro.name] = ro; break;
+        case "StarterPlayer": sp[ro.name] = ro; break;
+        case "Players": pl[ro.name] = ro; break;
+      }
+    }
+    this.objects = ws;
+    this.objectList = list;
+  }
+
+  private pushLog(line: string) { this.logs.push(line); if (this.logs.length > 200) this.logs.shift(); this.onLog?.(line); }
+
+  private buildState(): RuntimeState {
+    if (this._stateApi) return this._stateApi;
+    this._stateApi = {
+      get: (key) => this._stateValues.get(key),
+      set: (key, value) => { const v = String(value), prev = this._stateValues.get(key); if (prev === v) return; this._stateValues.set(key, v); const subs = this._stateSubs.get(key); if (!subs) return; for (const fn of subs) { try { fn(v, prev); } catch (e: any) { this.pushLog(`state.on("${key}") error: ${formatErr(e)}`); } } },
+      on: (key, fn) => { let subs = this._stateSubs.get(key); if (!subs) { subs = new Set(); this._stateSubs.set(key, subs); } subs.add(fn); return () => { subs?.delete(fn); }; },
+      keys: () => Array.from(this._stateValues.keys()),
+    };
+    return this._stateApi;
+  }
+
+  invokeGuiClick(id: string) { const el = this.gui.get(id); if (!el?.onClick) return; try { el.onClick(this.buildApi(0)); } catch (e: any) { this.pushLog(`gui[${id}] onClick error: ${formatErr(e)}`); } }
+
+  private buildApi(dt: number): GameAPI {
+    if (this._api) { this._api.time = this.time; this._api.dt = dt; return this._api; }
+
+    const log = (...args: any[]) => { const text = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" "); this.pushLog(text); };
+    const find = (name: string): RuntimeObject | null => { const containers = [this.workspace, this.lighting, this.replicatedStorage, this.serverScriptService, this.starterPlayer, this.players]; for (const c of containers) if (c[name]) return c[name]; for (const o of this._all.values()) if (o.name === name) return o; return null; };
+    const create = (opts: Parameters<GameAPI["create"]>[0]): RuntimeObject => {
+      const ro = this.createInternal({
+        name: opts.name,
+        primitiveType: opts.primitiveType,
+        container: this.normalizeContainer(opts.container),
+        position: { x: 0, y: 0.5, z: 0, ...(opts.position ?? {}) } as Vec3,
+        color: opts.color,
+        parentId: opts.parent ? opts.parent.id : null,
+        canCollide: opts.canCollide,
+        anchored: opts.anchored,
+        gravity: opts.gravity
+      });
+      if (opts.rotation) Object.assign(ro.rotation, opts.rotation);
+      if (opts.scale) Object.assign(ro.scale, opts.scale);
+      if (opts.type) ro.type = opts.type;
+      return ro;
+    };
+    const raycastFn = (origin: Vec3, direction: Vec3, maxDistance = 100, params?: RaycastParams) => raycastWorld(this._all.values(), origin, direction, maxDistance, params);
+    const networkApi = { server: this.network.server, client: this.network.client };
+    const spawn = (templateName: string, overrides?: Partial<RuntimeObject>): RuntimeObject | null => { const tpl = this.replicatedStorage[templateName]; if (!tpl) { this.pushLog(`spawn(): no ReplicatedStorage template named "${templateName}"`); return null; } const ro = this.cloneTemplateInto(tpl, "Workspace", overrides?.position ? { ...tpl.position, ...overrides.position } : undefined); if (overrides) { if (overrides.name) { ro.name = overrides.name; this.rebuildIndexes(); } if (overrides.rotation) Object.assign(ro.rotation, overrides.rotation); if (overrides.scale) Object.assign(ro.scale, overrides.scale); if (overrides.color != null) ro.color = overrides.color; if (overrides.visible != null) ro.visible = overrides.visible; if (overrides.anchored != null) ro.anchored = overrides.anchored; if (overrides.canCollide != null) ro.canCollide = overrides.canCollide; if (overrides.transparency != null) ro.transparency = overrides.transparency; if (overrides.mass != null) ro.mass = overrides.mass; if (overrides.friction != null) ro.friction = overrides.friction; if (overrides.velocity) Object.assign(ro.velocity, overrides.velocity); } return ro; };
+    const destroy = (target: RuntimeObject | string) => { if (typeof target === "string") { for (const ro of this._all.values()) if (ro.name === target || ro.id === target) { this.removeObject(ro.id); this.rebuildIndexes(); return; } return; } this.removeObject(target.id); this.rebuildIndexes(); };
+    const guiText = (id: string, text: string, opts?: Partial<Omit<GuiElement, "id" | "kind" | "text">>) => { const prev = this.gui.get(id); const el: GuiElement = { id, kind: "text", text, x: opts?.x ?? prev?.x ?? 0, y: opts?.y ?? prev?.y ?? 0, anchor: opts?.anchor ?? prev?.anchor ?? "tl", color: opts?.color ?? prev?.color ?? "#ffffff", size: opts?.size ?? prev?.size ?? 16, bg: opts?.bg ?? prev?.bg }; this.gui.set(id, el); this.guiVersion++; };
+    const guiButton = (id: string, text: string, opts: Partial<Omit<GuiElement, "id" | "kind" | "text">> | undefined, onClick?: (game: GameAPI) => void) => { const prev = this.gui.get(id); const el: GuiElement = { id, kind: "button", text, x: opts?.x ?? prev?.x ?? 16, y: opts?.y ?? prev?.y ?? 16, anchor: opts?.anchor ?? prev?.anchor ?? "tl", color: opts?.color ?? prev?.color ?? "#ffffff", size: opts?.size ?? prev?.size ?? 14, bg: opts?.bg ?? prev?.bg ?? "rgba(30,40,60,0.85)", onClick: onClick ?? prev?.onClick }; this.gui.set(id, el); this.guiVersion++; };
+    const guiClear = (id?: string) => { if (id == null) this.gui.clear(); else this.gui.delete(id); this.guiVersion++; };
+    const keyboardApi: KeyboardAPI = { onPress: (key, fn) => { const k = key.toLowerCase(); let s = this._keyDownHandlers.get(k); if (!s) { s = new Set(); this._keyDownHandlers.set(k, s); } s.add(fn); return () => s!.delete(fn); }, onRelease: (key, fn) => { const k = key.toLowerCase(); let s = this._keyUpHandlers.get(k); if (!s) { s = new Set(); this._keyUpHandlers.set(k, s); } s.add(fn); return () => s!.delete(fn); }, isDown: (key) => !!this.input.keys[key.toLowerCase()] };
+    const mouseApi: MouseAPI = { onClick: (fn) => { this._mouseClickHandlers.add(fn); return () => this._mouseClickHandlers.delete(fn); } };
+    const worldApi: WorldAPI = { onObjectAdded: (fn) => this._events.on("objectAdded", fn), onObjectRemoved: (fn) => this._events.on("objectRemoved", fn), onPlayerSpawned: (fn) => this._events.on("playerSpawned", fn), onPlayerDied: (fn) => this._events.on("playerDied", fn) };
+    const onKey = (key: string, fn: () => void) => keyboardApi.onPress(key, fn);
+    const onUpdateFn = (fn: (dt: number, time: number) => void) => this._events.on("update", fn);
+    const every = (seconds: number, fn: () => void) => { const t = { fn, nextAt: this.time + seconds, interval: seconds, once: false }; this._timers.push(t); return () => { const i = this._timers.indexOf(t); if (i >= 0) this._timers.splice(i, 1); }; };
+    const after = (seconds: number, fn: () => void) => { const t = { fn, nextAt: this.time + seconds, interval: seconds, once: true }; this._timers.push(t); return () => { const i = this._timers.indexOf(t); if (i >= 0) this._timers.splice(i, 1); }; };
+    const wait = (seconds: number) => new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, seconds * 1000)));
+    const now = () => this.time;
+    const tweenFn = (target: any, to: Record<string, any>, duration: number, easing: Easing = "linear", onDone?: () => void) => this._tweens.start(target, to, duration, easing, onDone);
+    const random = (min: number, max: number) => min + Math.random() * (max - min);
+    const randInt = (min: number, max: number) => Math.floor(min + Math.random() * (max - min + 1));
+    const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+    const dist = (a: Vec3 | { position: Vec3 }, b: Vec3 | { position: Vec3 }) => { const pa = "position" in a ? a.position : a; const pb = "position" in b ? b.position : b; return Math.hypot(pa.x - pb.x, pa.y - pb.y, pa.z - pb.z); };
+    const lerpFn = (a: number, b: number, t: number) => a + (b - a) * t;
+    const clampFn = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+
+    this._api = { 
+      objects: this.objects, 
+      workspace: this.workspace, 
+      lighting: this.lighting, 
+      replicatedStorage: this.replicatedStorage, 
+      serverScriptService: this.serverScriptService, 
+      starterPlayer: this.starterPlayer, 
+      players: this.players, 
+      player: this.player, 
+      input: this.input, 
+      physics: this.physics, 
+      state: this.buildState(), 
+      keyboard: keyboardApi, 
+      mouse: mouseApi, 
+      world: worldApi, 
+      runService: this.runService, 
+      time: this.time, 
+      dt, 
+      now, 
+      log, 
+      find, 
+      spawn, 
+      create, 
+      destroy, 
+      gui: { text: guiText, button: guiButton, clear: guiClear }, 
+      onKey, 
+      onUpdate: onUpdateFn, 
+      every, 
+      after, 
+      wait, 
+      tween: tweenFn, 
+      random, 
+      randInt, 
+      pick, 
+      dist, 
+      lerp: lerpFn, 
+      clamp: clampFn,
+      raycast: raycastFn,
+      network: networkApi,
+    };
+    return this._api!;
+  }
+
+  emitClick(objId: string | null) { const obj = objId ? (this._all.get(objId) ?? null) : null; if (obj) this.emitObjectEvent(obj.id, "clicked", [obj]); for (const fn of this._mouseClickHandlers) { try { fn(obj); } catch (e: any) { this.pushLog(`mouse.onClick error: ${formatErr(e)}`); } } }
+  emitTap(objId: string) { this.emitObjectEvent(objId, "clicked", [this._all.get(objId)]); }
+
+  private async runScripts() { const api = this.buildApi(0); for (const s of this.scripts) { if (s.error) { this.pushLog(`[${s.name}] compile error: ${s.error}`); continue; } if (!s.run) continue; try { const maybe = (s.run as any)(api); if (maybe && typeof maybe.then === "function") maybe.catch((e: any) => this.pushLog(`[${s.name}] runtime error: ${formatErr(e)}`)); } catch (e: any) { this.pushLog(`[${s.name}] runtime error: ${formatErr(e)}`); } } }
+
+  start() { void this.runScripts(); this._events.emit("start", [], (e, fn) => this.pushLog(`internal start error: ${formatErr(e)}`)); this._events.emit("playerSpawned", [this.player], (e, fn) => this.pushLog(`internal playerSpawned error: ${formatErr(e)}`)); }
+
+  stop() { this._events.emit("stop", [], () => {}); this._events.clear(); this._objectEvents.clear(); this._keyDownHandlers.clear(); this._keyUpHandlers.clear(); this._mouseClickHandlers.clear(); this._timers.length = 0; this._tweens.clear(); this.network.clear(); this.hierarchy.clear(); }
+
+  private updateAutoProperties(dt: number) {
+    for (const o of this._autoPropObjects) {
+      if (o.autoRotateY !== undefined) o.rotation.y += o.autoRotateY * dt;
+      if (o.autoSpin) {
+        if (o.autoSpin.x) o.rotation.x += o.autoSpin.x * dt;
+        if (o.autoSpin.y) o.rotation.y += o.autoSpin.y * dt;
+        if (o.autoSpin.z) o.rotation.z += o.autoSpin.z * dt;
+      }
+      if (o.autoBob) {
+        if (o.autoBob.startY === undefined) o.autoBob.startY = o.position.y;
+        o.autoBob._time = (o.autoBob._time || 0) + dt * o.autoBob.speed;
+        o.position.y = o.autoBob.startY + Math.sin(o.autoBob._time) * o.autoBob.amplitude;
+      }
+      if (o.autoFollow?.target) {
+        const targetPos = o.autoFollow.target.position;
+        const offset = o.autoFollow.offset || { x: 0, y: 0, z: 0 };
+        const dx = targetPos.x + offset.x - o.position.x;
+        const dy = targetPos.y + offset.y - o.position.y;
+        const dz = targetPos.z + offset.z - o.position.z;
+        const dist = Math.hypot(dx, dy, dz);
+        if (dist > 0.01) {
+          const move = Math.min(o.autoFollow.speed * dt, dist);
+          o.position.x += (dx / dist) * move;
+          o.position.y += (dy / dist) * move;
+          o.position.z += (dz / dist) * move;
+        }
+      }
+      if (o.autoMove) {
+        o.position.x += o.autoMove.direction.x * o.autoMove.speed * dt;
+        o.position.y += o.autoMove.direction.y * o.autoMove.speed * dt;
+        o.position.z += o.autoMove.direction.z * o.autoMove.speed * dt;
+      }
+    }
+
+    if (this.player.autoFaceMovement) {
+      const inputMag = Math.hypot(this.input.moveX, this.input.moveZ);
+      if (inputMag > 0.01) {
+        const cf = this.cameraForward;
+        const up = this.player.up;
+        const cfDot = cf.x * up.x + cf.y * up.y + cf.z * up.z;
+        let fx = cf.x - up.x * cfDot;
+        let fz = cf.z - up.z * cfDot;
+        const len = Math.hypot(fx, fz);
+        if (len > 0.001) { fx /= len; fz /= len; }
+        const targetYaw = Math.atan2(this.input.moveX, this.input.moveZ);
+        let diff = targetYaw - this.player.rotation.y;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        this.player.rotation.y += diff * Math.min(1, dt * 12);
+      }
+    }
+  }
+
+  step(dt: number) {
+    if (dt > 0.1) dt = 0.1;
+    this.time += dt;
+    const p = this.player;
+
+    for (const k in this.input.keys) {
+      const isDown = !!this.input.keys[k];
+      const wasDown = !!this._prevKeys[k];
+      if (isDown && !wasDown) {
+        this._events.emit("keyDown", [k], (e, fn) => this.pushLog(`internal keyDown error: ${formatErr(e)}`));
+        const set = this._keyDownHandlers.get(k);
+        if (set) for (const fn of set) try { fn(); } catch (e: any) { this.pushLog(`keyboard.onPress("${k}") error: ${formatErr(e)}`); }
+      } else if (!isDown && wasDown) {
+        this._events.emit("keyUp", [k], (e, fn) => this.pushLog(`internal keyUp error: ${formatErr(e)}`));
+        const set = this._keyUpHandlers.get(k);
+        if (set) for (const fn of set) try { fn(); } catch (e: any) { this.pushLog(`keyboard.onRelease("${k}") error: ${formatErr(e)}`); }
+      }
+    }
+    this._events.emit("input", [dt, this.time], (e, fn) => this.pushLog(`runService.input error: ${formatErr(e)}`));
+    this._tweens.step(dt);
+    this._events.emit("animation", [dt, this.time], (e, fn) => this.pushLog(`runService.animation error: ${formatErr(e)}`));
+    this.network.step(dt, this.player, this.objectList, {
+      t: this.time,
+      moveX: this.input.moveX,
+      moveZ: this.input.moveZ,
+      jump: this.input.jump,
+      keys: { ...this.input.keys },
+    });
+    this._events.emit("replication", [dt, this.time], (e, fn) => this.pushLog(`runService.replication error: ${formatErr(e)}`));
+
+    this.updateAutoProperties(dt);
+
+    const gravityVec = this.computeGravity(p.position, p);
+    const gMag = Math.hypot(gravityVec.x, gravityVec.y, gravityVec.z);
+    const desiredUp = gMag > 0.001 ? { x: -gravityVec.x / gMag, y: -gravityVec.y / gMag, z: -gravityVec.z / gMag } : { x: 0, y: 1, z: 0 };
+    const slerpT = Math.min(1, dt * 6);
+    p.up.x = p.up.x + (desiredUp.x - p.up.x) * slerpT;
+    p.up.y = p.up.y + (desiredUp.y - p.up.y) * slerpT;
+    p.up.z = p.up.z + (desiredUp.z - p.up.z) * slerpT;
+    const upLen = Math.hypot(p.up.x, p.up.y, p.up.z) || 1;
+    p.up.x /= upLen; p.up.y /= upLen; p.up.z /= upLen;
+
+    const cf = this.cameraForward;
+    const cfDot = cf.x * p.up.x + cf.y * p.up.y + cf.z * p.up.z;
+    let fx = cf.x - p.up.x * cfDot;
+    let fy = cf.y - p.up.y * cfDot;
+    let fz = cf.z - p.up.z * cfDot;
+    let fLen = Math.hypot(fx, fy, fz);
+    if (fLen < 0.0001) {
+      const fallback = Math.abs(p.up.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+      const fbDot = fallback.x * p.up.x + fallback.y * p.up.y + fallback.z * p.up.z;
+      fx = fallback.x - p.up.x * fbDot;
+      fy = fallback.y - p.up.y * fbDot;
+      fz = fallback.z - p.up.z * fbDot;
+      fLen = Math.hypot(fx, fy, fz) || 1;
+    }
+    fx /= fLen; fy /= fLen; fz /= fLen;
+    const rx = fy * p.up.z - fz * p.up.y;
+    const rz = fx * p.up.y - fy * p.up.x;
+
+    const speed = p.speed || 6;
+    const wantX = rx * this.input.moveX - fx * this.input.moveZ;
+    const wantZ = rz * this.input.moveX - fz * this.input.moveZ;
+    const upVelDot = p.velocity.x * p.up.x + p.velocity.y * p.up.y + p.velocity.z * p.up.z;
+    p.velocity.x = wantX * speed + p.up.x * upVelDot;
+    p.velocity.z = wantZ * speed + p.up.z * upVelDot;
+
+    if (this.input.jump && p.onGround) {
+      const jp = p.jumpPower || 8;
+      p.velocity.x += p.up.x * jp;
+      p.velocity.y += p.up.y * jp;
+      p.velocity.z += p.up.z * jp;
+      p.onGround = false;
+    }
+
+    p.velocity.x += gravityVec.x * dt;
+    p.velocity.y += gravityVec.y * dt;
+    p.velocity.z += gravityVec.z * dt;
+    p.position.x += p.velocity.x * dt;
+    p.position.y += p.velocity.y * dt;
+    p.position.z += p.velocity.z * dt;
+
+    for (const o of this.objectList) {
+      if (o.anchored || o.container !== "Workspace") continue;
+      const og = this.computeGravity(o.position, o);
+      o.velocity.x += og.x * dt;
+      o.velocity.y += og.y * dt;
+      o.velocity.z += og.z * dt;
+      o.position.x += o.velocity.x * dt;
+      o.position.y += o.velocity.y * dt;
+      o.position.z += o.velocity.z * dt;
+    }
+
+    for (const o of this.objectList) {
+      if (!o.visible || !o.canCollide) continue;
+      if (o.type === "light" || o.type === "spawn") continue;
+      if (o.container !== "Workspace") continue;
+      this.resolvePlayerVsObject(o);
+    }
+
+    this.runPickupSweep();
+
+    if (p.position.y < 1) {
+      p.position.y = 1;
+      if (p.velocity.y < 0) p.velocity.y = 0;
+      p.onGround = true;
+      const f = 1 - Math.min(1, 0.4 * 8 * dt);
+      p.velocity.x *= f;
+      p.velocity.z *= f;
+    } else if (p.position.y > 1.001) p.onGround = false;
+
+    this.runTouchSweep();
+    resolveObjectCollisions(this.objectList);
+    this._events.emit("physics", [dt, this.time], (e, fn) => this.pushLog(`runService.physics error: ${formatErr(e)}`));
+    this._events.emit("render", [dt, this.time], (e, fn) => this.pushLog(`runService.render error: ${formatErr(e)}`));
+    this._events.emit("update", [dt, this.time], (e, fn) => this.pushLog(`runService.update error: ${formatErr(e)}`));
+
+    for (let i = this._timers.length - 1; i >= 0; i--) {
+      const t = this._timers[i];
+      if (this.time < t.nextAt) continue;
+      try { t.fn(); } catch (e: any) { this.pushLog(`timer error: ${formatErr(e)}`); }
+      if (t.once) this._timers.splice(i, 1);
+      else t.nextAt = this.time + t.interval;
+    }
+
+    if (p.health <= 0 && (this as any)._lastHealth > 0) { this._events.emit("playerDied", [p], () => {}); p.respawn(); this._events.emit("playerSpawned", [p], () => {}); }
+    (this as any)._lastHealth = p.health;
+
+    this.input.jump = false;
+    this._prevKeys = { ...this.input.keys };
+    this.buildApi(dt);
+  }
+
+  private runTouchSweep() {
+    const p = this.player;
+    const pr = 0.45, ph = 0.95;
+    const seenThisFrame = new Set<string>();
+    for (const o of this.objectList) {
+      if (!o.visible || o.type === "light" || o.type === "spawn" || o.container !== "Workspace") continue;
+      let touching = false;
+      if (o.primitiveType === "sphere") {
+        const r = Math.max(o.scale.x, o.scale.y, o.scale.z) * 0.5;
+        touching = Math.hypot(p.position.x - o.position.x, p.position.y - o.position.y, p.position.z - o.position.z) < r + pr + 0.05;
+      } else {
+        touching = Math.abs(p.position.x - o.position.x) < (o.scale.x || 1) * 0.5 + pr &&
+                   Math.abs(p.position.y - o.position.y) < (o.scale.y || 1) * 0.5 + ph &&
+                   Math.abs(p.position.z - o.position.z) < (o.scale.z || 1) * 0.5 + pr;
+      }
+      if (touching) { seenThisFrame.add(o.id); if (!this._playerContacts.has(o.id)) { this._playerContacts.add(o.id); this.emitObjectEvent(o.id, "touched", [p, o]); } }
+    }
+    for (const id of this._playerContacts) if (!seenThisFrame.has(id)) { this._playerContacts.delete(id); this.emitObjectEvent(id, "untouched", [p, this._all.get(id)]); }
+  }
+
+  private computeGravity(point: Vec3, subject: RuntimeObject | RuntimePlayer): Vec3 {
+    let bestMag = 0, best: Vec3 | null = null;
+    for (const o of this.objectList) {
+      const src = (o as any)._gravitySource;
+      if (!src.enabled) continue;
+      if (subject.gravity && subject.gravity[o.name] === false) continue;
+      const { surfaceDistance, dirToCenter, surfaceRadius } = pointVsObjectSurface(point, o);
+      if (surfaceDistance > src.radius) continue;
+      const r = Math.max(surfaceRadius, surfaceRadius + Math.max(0, surfaceDistance));
+      const accel = (src.strength * surfaceRadius * surfaceRadius) / (r * r);
+      if (accel > bestMag) { bestMag = accel; best = { x: dirToCenter.x * accel, y: dirToCenter.y * accel, z: dirToCenter.z * accel }; }
+    }
+    return best || { x: 0, y: -(this.physics.gravity || 9.81), z: 0 };
+  }
+
+  private resolvePlayerVsObject(o: RuntimeObject) {
+    const p = this.player;
+    const pr = 0.4, ph = 0.9;
+    if (o.primitiveType === "sphere") {
+      const r = Math.max(o.scale.x, o.scale.y, o.scale.z) * 0.5;
+      const dx = p.position.x - o.position.x, dy = p.position.y - o.position.y, dz = p.position.z - o.position.z;
+      const dist = Math.hypot(dx, dy, dz);
+      const minDist = r + pr;
+      if (dist < minDist && dist > 0.0001) {
+        const nx = dx / dist, ny = dy / dist, nz = dz / dist;
+        const push = minDist - dist;
+        p.position.x += nx * push; p.position.y += ny * push; p.position.z += nz * push;
+        const vDotN = p.velocity.x * nx + p.velocity.y * ny + p.velocity.z * nz;
+        if (vDotN < 0) {
+          p.velocity.x -= nx * vDotN;
+          p.velocity.y -= ny * vDotN;
+          p.velocity.z -= nz * vDotN;
+          if (!o.anchored) {
+            const massRatio = o.mass / (p.mass ?? 1);
+            o.velocity.x += nx * vDotN * massRatio;
+            o.velocity.y += ny * vDotN * massRatio;
+            o.velocity.z += nz * vDotN * massRatio;
+          }
+        }
+        if (nx * p.up.x + ny * p.up.y + nz * p.up.z > 0.5) p.onGround = true;
+      }
+      return;
+    }
+    const halfX = (o.scale.x || 1) * 0.5 + pr, halfY = (o.scale.y || 1) * 0.5 + ph, halfZ = (o.scale.z || 1) * 0.5 + pr;
+    const dx = p.position.x - o.position.x, dy = p.position.y - o.position.y, dz = p.position.z - o.position.z;
+    if (Math.abs(dx) < halfX && Math.abs(dy) < halfY && Math.abs(dz) < halfZ) {
+      const overlapX = halfX - Math.abs(dx), overlapY = halfY - Math.abs(dy), overlapZ = halfZ - Math.abs(dz);
+      let nx = 0, ny = 0, nz = 0, overlap = 0;
+      if (overlapY < overlapX && overlapY < overlapZ) {
+        overlap = overlapY;
+        ny = dy > 0 ? 1 : -1;
+        if (ny > 0) { p.onGround = true; }
+      } else if (overlapX < overlapZ) {
+        overlap = overlapX;
+        nx = dx > 0 ? 1 : -1;
+      } else {
+        overlap = overlapZ;
+        nz = dz > 0 ? 1 : -1;
+      }
+      p.position.x += nx * overlap;
+      p.position.y += ny * overlap;
+      p.position.z += nz * overlap;
+      const vDotN = p.velocity.x * nx + p.velocity.y * ny + p.velocity.z * nz;
+      if (vDotN < 0) {
+        p.velocity.x -= vDotN * nx;
+        p.velocity.y -= vDotN * ny;
+        p.velocity.z -= vDotN * nz;
+        if (!o.anchored) {
+          const massRatio = o.mass / (p.mass ?? 1);
+          o.velocity.x += nx * vDotN * massRatio;
+          o.velocity.y += ny * vDotN * massRatio;
+          o.velocity.z += nz * vDotN * massRatio;
+        }
+      }
+    }
+  }
 }
 
-// DEFAULT SCRIPT AND DOCS (unchanged from previous)
 export const DEFAULT_SCRIPT = `// Welcome! Clean API with the new gravity system!
 
 runService.update.on((dt) => {
@@ -743,5 +1413,10 @@ obj.autoRotateY, obj.autoBob, obj.autoFollow, obj.autoSpin, obj.autoMove, player
 
 # RunService phases
 
-runService.input.on(dt => {}); runService.animation.on(dt => {}); runService.replication.on(dt => {}); runService.physics.on(dt => {}); runService.render.on(dt => {}); runService.update.on(dt => {});
+runService.input.on(dt => {});
+runService.animation.on(dt => {});
+runService.replication.on(dt => {});
+runService.physics.on(dt => {});
+runService.render.on(dt => {});
+runService.update.on(dt => {});
 `;
