@@ -1,5 +1,12 @@
 import type { GameObject, Script } from "@shared/schema";
 import { TweenManager, type Easing } from "./runtime/tween";
+import { HierarchyIndex } from "./runtime/hierarchy";
+import { raycast as raycastWorld, type RaycastResult, type RaycastParams } from "./runtime/raycast";
+import { resolveObjectCollisions } from "./runtime/collision";
+import { NetworkBus, type NetSnapshot, type NetInput } from "./runtime/network";
+
+export type { RaycastResult, RaycastParams } from "./runtime/raycast";
+export type { NetSnapshot, NetInput } from "./runtime/network";
 
 export type Vec3 = { x: number; y: number; z: number };
 
@@ -78,11 +85,18 @@ export type RuntimeObject = {
   autoFollow?: { target: RuntimeObject | RuntimePlayer; speed: number; offset?: Vec3 };
   autoSpin?: { x?: number; y?: number; z?: number };
   autoMove?: { direction: Vec3; speed: number };
+  /** Parent in the hierarchy (Roblox-style). null = top-level in container. */
+  parentId: string | null;
+  /** Live array of direct children (computed from the HierarchyIndex). */
+  readonly children: RuntimeObject[];
+  /** Walk children to find one by name (returns first match). */
+  findFirstChild: (name: string) => RuntimeObject | null;
+  /** Move this object under a new parent (or null to detach). */
+  setParent: (parent: RuntimeObject | null) => void;
   on: (event: ObjectEventName, fn: (...args: any[]) => void) => () => void;
   off: (event: ObjectEventName, fn: (...args: any[]) => void) => void;
   GetPropertyChangedSignal: (property: string) => EventsAPI;
 };
-
 export type InventoryItem = {
   id: string;
   name: string;
@@ -319,8 +333,22 @@ export type GameAPI = {
     scale?: Partial<Vec3>;
     color?: string;
     type?: string;
+    /** Optional parent object for hierarchy. */
+    parent?: RuntimeObject | null;
+    /** Optional collision flag override (defaults to true). */
+    canCollide?: boolean;
+    /** Optional anchored flag override (defaults to false for created parts). */
+    anchored?: boolean;
   }) => RuntimeObject;
   destroy: (objOrName: RuntimeObject | string) => void;
+  /** Cast a ray through the world. Returns the closest collidable hit (or null). */
+  raycast: (origin: Vec3, direction: Vec3, maxDistance?: number, params?: RaycastParams) => RaycastResult;
+  /** Server-authoritative replication. `network.server` for authoritative
+   *  logic, `network.client` for client-only listeners / input sends. */
+  network: {
+    server: { broadcast: (channel: string, payload: any) => void; on: (channel: string, fn: (payload: any) => void) => () => void };
+    client: { send: (channel: string, payload: any) => void; on: (channel: string, fn: (payload: any) => void) => () => void };
+  };
   gui: {
     text: (id: string, text: string, opts?: Partial<Omit<GuiElement, "id" | "kind" | "text">>) => void;
     button: (id: string, text: string, opts: Partial<Omit<GuiElement, "id" | "kind" | "text">> | undefined, onClick?: (game: GameAPI) => void) => void;
@@ -392,6 +420,8 @@ export function compileScript(code: string, name: string): CompiledScript {
        const dist = game.dist;
        const lerp = game.lerp;
        const clamp = game.clamp;
+       const raycast = game.raycast;
+       const network = game.network;
        const console = {
          log:   (...a) => game.log(...a),
          info:  (...a) => game.log("[info]", ...a),
@@ -537,6 +567,10 @@ export class GameRuntime {
   private _playerContacts = new Set<string>();
   private _api: GameAPI | null = null;
   private _mouseClickHandlers = new Set<(obj: RuntimeObject | null) => void>();
+  /** Parent → children index. Maintained alongside `_all`. */
+  hierarchy = new HierarchyIndex();
+  /** Local server-authoritative replication stub. */
+  network = new NetworkBus();
   input: RuntimeInput;
   physics: RuntimePhysics = { gravity: 9.81, airDrag: 0 };
   cameraYaw = 0;
@@ -579,6 +613,10 @@ export class GameRuntime {
         velocity: { x: 0, y: 0, z: 0 },
         on: () => () => {},
         off: () => {},
+        parentId: null,
+        children: [],
+        findFirstChild: () => null,
+        setParent: () => {},
         GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
       };
       this.mountObjectEvents(ro);
@@ -675,7 +713,7 @@ export class GameRuntime {
       return removed;
     };
 
-    inv.has = (name: string, count: number = 1): boolean => items.find(i => i.name === name)?.count >= count ?? false;
+    inv.has = (name: string, count: number = 1): boolean => (items.find(i => i.name === name)?.count ?? 0) >= count;
     inv.get = (name: string): InventoryItem | null => items.find(i => i.name === name) ?? null;
     inv.equip = (name: string | null): boolean => {
       if (name == null) { equippedId = null; return true; }
@@ -732,6 +770,25 @@ export class GameRuntime {
       return { on: (event, fn) => bus!.on(event as any, fn as any), off: (event, fn) => bus!.off(event as any, fn as any) };
     };
 
+    // Hierarchy: live `children` getter + helpers backed by HierarchyIndex.
+    const hi = this.hierarchy;
+    const all = this._all;
+    Object.defineProperty(ro, "children", {
+      configurable: true,
+      get: () => hi.childIds(id).map((cid) => all.get(cid)).filter(Boolean) as RuntimeObject[],
+    });
+    ro.findFirstChild = (name: string) => {
+      for (const cid of hi.childIds(id)) {
+        const c = all.get(cid);
+        if (c && c.name === name) return c;
+      }
+      return null;
+    };
+    ro.setParent = (parent: RuntimeObject | null) => {
+      hi.reparent(ro, parent ? parent.id : null);
+    };
+    hi.add(ro);
+
     const proxy = new Proxy(ro, {
       set: (target, prop, value) => {
         const propName = prop as string;
@@ -756,7 +813,7 @@ export class GameRuntime {
     bus.emit(event as any, args, (e, fn) => this.pushLog(`obj.on("${event}") error: ${formatErr(e)}`));
   }
 
-  private createInternal(opts: { name?: string; primitiveType?: "cube" | "sphere" | "cylinder" | "plane"; container?: ContainerName; position?: Vec3; color?: string; }): RuntimeObject {
+  private createInternal(opts: { name?: string; primitiveType?: "cube" | "sphere" | "cylinder" | "plane"; container?: ContainerName; position?: Vec3; color?: string; parentId?: string | null; canCollide?: boolean; anchored?: boolean; }): RuntimeObject {
     const ro: RuntimeObject = {
       id: newId(),
       name: opts.name ?? `Part_${this._all.size + 1}`,
@@ -769,11 +826,16 @@ export class GameRuntime {
       color: opts.color ?? "#88aaff",
       visible: true,
       ...DEFAULT_PROPERTIES,
-      anchored: false,
+      anchored: opts.anchored ?? false,
+      canCollide: opts.canCollide ?? DEFAULT_PROPERTIES.canCollide,
       velocity: { x: 0, y: 0, z: 0 },
       on: () => () => {},
       off: () => {},
-      GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+      parentId: opts.parentId ?? null,
+        children: [],
+        findFirstChild: () => null,
+        setParent: () => {},
+        GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
     };
     const proxiedRo = this.mountObjectEvents(ro);
     this._all.set(ro.id, proxiedRo);
@@ -805,7 +867,11 @@ export class GameRuntime {
       velocity: { x: 0, y: 0, z: 0 },
       on: () => () => {},
       off: () => {},
-      GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+      parentId: null,
+        children: [],
+        findFirstChild: () => null,
+        setParent: () => {},
+        GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
     };
     const proxiedRo = this.mountObjectEvents(ro);
     this._all.set(ro.id, proxiedRo);
@@ -817,10 +883,22 @@ export class GameRuntime {
   private removeObject(id: string) {
     const ro = this._all.get(id);
     if (!ro) return;
+    // Cascade destroy descendants so detached subtrees don't linger.
+    for (const cid of this.hierarchy.descendantIds(id)) {
+      const child = this._all.get(cid);
+      if (!child) continue;
+      this._all.delete(cid);
+      this._playerContacts.delete(cid);
+      this.emitObjectEvent(cid, "destroyed", []);
+      this._objectEvents.delete(cid);
+      this.hierarchy.remove(child);
+      this._events.emit("objectRemoved", [child]);
+    }
     this._all.delete(id);
     this._playerContacts.delete(id);
     this.emitObjectEvent(id, "destroyed", []);
     this._objectEvents.delete(id);
+    this.hierarchy.remove(ro);
     this._events.emit("objectRemoved", [ro]);
   }
 
@@ -880,7 +958,9 @@ export class GameRuntime {
 
     const log = (...args: any[]) => { const text = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" "); this.pushLog(text); };
     const find = (name: string): RuntimeObject | null => { const containers = [this.workspace, this.lighting, this.replicatedStorage, this.serverScriptService, this.starterPlayer, this.players]; for (const c of containers) if (c[name]) return c[name]; for (const o of this._all.values()) if (o.name === name) return o; return null; };
-    const create = (opts: Parameters<GameAPI["create"]>[0]): RuntimeObject => { const ro = this.createInternal({ name: opts.name, primitiveType: opts.primitiveType, container: this.normalizeContainer(opts.container), position: { x: 0, y: 0.5, z: 0, ...(opts.position ?? {}) } as Vec3, color: opts.color }); if (opts.rotation) Object.assign(ro.rotation, opts.rotation); if (opts.scale) Object.assign(ro.scale, opts.scale); if (opts.type) ro.type = opts.type; return ro; };
+    const create = (opts: Parameters<GameAPI["create"]>[0]): RuntimeObject => { const ro = this.createInternal({ name: opts.name, primitiveType: opts.primitiveType, container: this.normalizeContainer(opts.container), position: { x: 0, y: 0.5, z: 0, ...(opts.position ?? {}) } as Vec3, color: opts.color, parentId: opts.parent ? opts.parent.id : null, canCollide: opts.canCollide, anchored: opts.anchored }); if (opts.rotation) Object.assign(ro.rotation, opts.rotation); if (opts.scale) Object.assign(ro.scale, opts.scale); if (opts.type) ro.type = opts.type; return ro; };
+    const raycastFn = (origin: Vec3, direction: Vec3, maxDistance = 100, params?: RaycastParams) => raycastWorld(this._all.values(), origin, direction, maxDistance, params);
+    const networkApi = { server: this.network.server, client: this.network.client };
     const spawn = (templateName: string, overrides?: Partial<RuntimeObject>): RuntimeObject | null => { const tpl = this.replicatedStorage[templateName]; if (!tpl) { this.pushLog(`spawn(): no ReplicatedStorage template named "${templateName}"`); return null; } const ro = this.cloneTemplateInto(tpl, "Workspace", overrides?.position ? { ...tpl.position, ...overrides.position } : undefined); if (overrides) { if (overrides.name) { ro.name = overrides.name; this.rebuildIndexes(); } if (overrides.rotation) Object.assign(ro.rotation, overrides.rotation); if (overrides.scale) Object.assign(ro.scale, overrides.scale); if (overrides.color != null) ro.color = overrides.color; if (overrides.visible != null) ro.visible = overrides.visible; if (overrides.anchored != null) ro.anchored = overrides.anchored; if (overrides.canCollide != null) ro.canCollide = overrides.canCollide; if (overrides.transparency != null) ro.transparency = overrides.transparency; if (overrides.mass != null) ro.mass = overrides.mass; if (overrides.friction != null) ro.friction = overrides.friction; if (overrides.gravityEnabled != null) ro.gravityEnabled = overrides.gravityEnabled; if (overrides.gravityStrength != null) ro.gravityStrength = overrides.gravityStrength; if (overrides.gravityRadius != null) ro.gravityRadius = overrides.gravityRadius; if (overrides.velocity) Object.assign(ro.velocity, overrides.velocity); } return ro; };
     const destroy = (target: RuntimeObject | string) => { if (typeof target === "string") { for (const ro of this._all.values()) if (ro.name === target || ro.id === target) { this.removeObject(ro.id); this.rebuildIndexes(); return; } return; } this.removeObject(target.id); this.rebuildIndexes(); };
     const guiText = (id: string, text: string, opts?: Partial<Omit<GuiElement, "id" | "kind" | "text">>) => { const prev = this.gui.get(id); const el: GuiElement = { id, kind: "text", text, x: opts?.x ?? prev?.x ?? 0, y: opts?.y ?? prev?.y ?? 0, anchor: opts?.anchor ?? prev?.anchor ?? "tl", color: opts?.color ?? prev?.color ?? "#ffffff", size: opts?.size ?? prev?.size ?? 16, bg: opts?.bg ?? prev?.bg }; this.gui.set(id, el); this.guiVersion++; };
@@ -939,9 +1019,11 @@ export class GameRuntime {
       pick, 
       dist, 
       lerp: lerpFn, 
-      clamp: clampFn 
+      clamp: clampFn,
+      raycast: raycastFn,
+      network: networkApi,
     };
-    return this._api;
+    return this._api!;
   }
 
   emitClick(objId: string | null) { const obj = objId ? (this._all.get(objId) ?? null) : null; if (obj) this.emitObjectEvent(obj.id, "clicked", [obj]); for (const fn of this._mouseClickHandlers) { try { fn(obj); } catch (e: any) { this.pushLog(`mouse.onClick error: ${formatErr(e)}`); } } }
@@ -951,7 +1033,7 @@ export class GameRuntime {
 
   start() { void this.runScripts(); this._events.emit("start", [], (e, fn) => this.pushLog(`internal start error: ${formatErr(e)}`)); this._events.emit("playerSpawned", [this.player], (e, fn) => this.pushLog(`internal playerSpawned error: ${formatErr(e)}`)); }
 
-  stop() { this._events.emit("stop", [], () => {}); this._events.clear(); this._objectEvents.clear(); this._keyDownHandlers.clear(); this._keyUpHandlers.clear(); this._mouseClickHandlers.clear(); this._timers.length = 0; this._tweens.clear(); }
+  stop() { this._events.emit("stop", [], () => {}); this._events.clear(); this._objectEvents.clear(); this._keyDownHandlers.clear(); this._keyUpHandlers.clear(); this._mouseClickHandlers.clear(); this._timers.length = 0; this._tweens.clear(); this.network.clear(); this.hierarchy.clear(); }
 
   private updateAutoProperties(dt: number) {
     // Update auto-rotation and auto-spin for all objects
@@ -1051,6 +1133,14 @@ export class GameRuntime {
     this._events.emit("animation", [dt, this.time], (e, fn) => this.pushLog(`runService.animation error: ${formatErr(e)}`));
 
     // ========== REPLICATION PHASE ==========
+    // Server-authoritative replication: push input up, broadcast snapshots down.
+    this.network.step(dt, this.player, this.objectList, {
+      t: this.time,
+      moveX: this.input.moveX,
+      moveZ: this.input.moveZ,
+      jump: this.input.jump,
+      keys: { ...this.input.keys },
+    });
     this._events.emit("replication", [dt, this.time], (e, fn) => this.pushLog(`runService.replication error: ${formatErr(e)}`));
 
     // ========== PHYSICS PHASE ==========
@@ -1134,6 +1224,8 @@ export class GameRuntime {
     } else if (p.position.y > 1.001) p.onGround = false;
 
     this.runTouchSweep();
+    // Object-vs-object collisions (honors canCollide on BOTH parties).
+    resolveObjectCollisions(this.objectList);
     this._events.emit("physics", [dt, this.time], (e, fn) => this.pushLog(`runService.physics error: ${formatErr(e)}`));
 
     // ========== RENDER PHASE ==========
@@ -1305,6 +1397,31 @@ runService.update.on((dt) => {
 
 every(0.8, () => spawnBlock());
 log("Game ready! Clean runService API, auto-updates, everything works!");
+
+// ========== HIERARCHY (PARENTING) ==========
+// Every object can be parented like Roblox. Children move with destroy().
+const turret = create({ primitiveType: "cube", position: { x: 0, y: 1, z: 0 }, color: "#888" });
+const barrel = create({ primitiveType: "cylinder", position: { x: 0, y: 1.5, z: 0 }, color: "#444", parent: turret });
+log("turret children:", turret.children.length);  // 1
+// barrel.setParent(null) to detach. destroy(turret) also destroys barrel.
+
+// ========== canCollide WORKS ON EVERYTHING ==========
+const ghostWall = create({ primitiveType: "cube", scale: { x: 4, y: 4, z: 0.2 }, color: "#aaf", canCollide: false });
+// Other parts (and the player) pass right through ghostWall.
+
+// ========== RAYCASTING ==========
+runService.update.on(() => {
+  const hit = raycast(player.position, { x: 0, y: -1, z: 0 }, 5);
+  if (hit) log("ground:", hit.object.name, "@", hit.distance.toFixed(2));
+});
+
+// ========== REPLICATION (server-authoritative stub) ==========
+// Server side: receive client input, broadcast snapshots automatically.
+network.server.on("__input", (msg) => { /* msg.moveX, msg.jump, ... */ });
+network.server.broadcast("hello", { msg: "welcome" });
+// Client side: send custom messages up, listen for snapshots down.
+network.client.on("__snapshot", (snap) => { /* snap.player, snap.objects */ });
+network.client.send("action", { kind: "fire" });
 `;
 
 export const SCRIPTING_DOCS = `# Scripting Guide - Clean API Edition!
