@@ -333,8 +333,22 @@ export type GameAPI = {
     scale?: Partial<Vec3>;
     color?: string;
     type?: string;
+    /** Optional parent object for hierarchy. */
+    parent?: RuntimeObject | null;
+    /** Optional collision flag override (defaults to true). */
+    canCollide?: boolean;
+    /** Optional anchored flag override (defaults to false for created parts). */
+    anchored?: boolean;
   }) => RuntimeObject;
   destroy: (objOrName: RuntimeObject | string) => void;
+  /** Cast a ray through the world. Returns the closest collidable hit (or null). */
+  raycast: (origin: Vec3, direction: Vec3, maxDistance?: number, params?: RaycastParams) => RaycastResult;
+  /** Server-authoritative replication. `network.server` for authoritative
+   *  logic, `network.client` for client-only listeners / input sends. */
+  network: {
+    server: { broadcast: (channel: string, payload: any) => void; on: (channel: string, fn: (payload: any) => void) => () => void };
+    client: { send: (channel: string, payload: any) => void; on: (channel: string, fn: (payload: any) => void) => () => void };
+  };
   gui: {
     text: (id: string, text: string, opts?: Partial<Omit<GuiElement, "id" | "kind" | "text">>) => void;
     button: (id: string, text: string, opts: Partial<Omit<GuiElement, "id" | "kind" | "text">> | undefined, onClick?: (game: GameAPI) => void) => void;
