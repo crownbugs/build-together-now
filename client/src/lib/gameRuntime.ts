@@ -1,5 +1,12 @@
 import type { GameObject, Script } from "@shared/schema";
 import { TweenManager, type Easing } from "./runtime/tween";
+import { HierarchyIndex } from "./runtime/hierarchy";
+import { raycast as raycastWorld, type RaycastResult, type RaycastParams } from "./runtime/raycast";
+import { resolveObjectCollisions } from "./runtime/collision";
+import { NetworkBus, type NetSnapshot, type NetInput } from "./runtime/network";
+
+export type { RaycastResult, RaycastParams } from "./runtime/raycast";
+export type { NetSnapshot, NetInput } from "./runtime/network";
 
 export type Vec3 = { x: number; y: number; z: number };
 
