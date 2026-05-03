@@ -96,7 +96,7 @@ export type RuntimeObject = {
   on: (event: ObjectEventName, fn: (...args: any[]) => void) => () => void;
   off: (event: ObjectEventName, fn: (...args: any[]) => void) => void;
   GetPropertyChangedSignal: (property: string) => EventsAPI;
-
+};
 export type InventoryItem = {
   id: string;
   name: string;
