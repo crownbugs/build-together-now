@@ -754,6 +754,25 @@ export class GameRuntime {
       return { on: (event, fn) => bus!.on(event as any, fn as any), off: (event, fn) => bus!.off(event as any, fn as any) };
     };
 
+    // Hierarchy: live `children` getter + helpers backed by HierarchyIndex.
+    const hi = this.hierarchy;
+    const all = this._all;
+    Object.defineProperty(ro, "children", {
+      configurable: true,
+      get: () => hi.childIds(id).map((cid) => all.get(cid)).filter(Boolean) as RuntimeObject[],
+    });
+    ro.findFirstChild = (name: string) => {
+      for (const cid of hi.childIds(id)) {
+        const c = all.get(cid);
+        if (c && c.name === name) return c;
+      }
+      return null;
+    };
+    ro.setParent = (parent: RuntimeObject | null) => {
+      hi.reparent(ro, parent ? parent.id : null);
+    };
+    hi.add(ro);
+
     const proxy = new Proxy(ro, {
       set: (target, prop, value) => {
         const propName = prop as string;
