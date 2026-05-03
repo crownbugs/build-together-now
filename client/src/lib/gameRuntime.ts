@@ -85,10 +85,17 @@ export type RuntimeObject = {
   autoFollow?: { target: RuntimeObject | RuntimePlayer; speed: number; offset?: Vec3 };
   autoSpin?: { x?: number; y?: number; z?: number };
   autoMove?: { direction: Vec3; speed: number };
+  /** Parent in the hierarchy (Roblox-style). null = top-level in container. */
+  parentId: string | null;
+  /** Live array of direct children (computed from the HierarchyIndex). */
+  readonly children: RuntimeObject[];
+  /** Walk children to find one by name (returns first match). */
+  findFirstChild: (name: string) => RuntimeObject | null;
+  /** Move this object under a new parent (or null to detach). */
+  setParent: (parent: RuntimeObject | null) => void;
   on: (event: ObjectEventName, fn: (...args: any[]) => void) => () => void;
   off: (event: ObjectEventName, fn: (...args: any[]) => void) => void;
   GetPropertyChangedSignal: (property: string) => EventsAPI;
-};
 
 export type InventoryItem = {
   id: string;
