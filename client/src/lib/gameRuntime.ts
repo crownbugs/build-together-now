@@ -866,10 +866,22 @@ export class GameRuntime {
   private removeObject(id: string) {
     const ro = this._all.get(id);
     if (!ro) return;
+    // Cascade destroy descendants so detached subtrees don't linger.
+    for (const cid of this.hierarchy.descendantIds(id)) {
+      const child = this._all.get(cid);
+      if (!child) continue;
+      this._all.delete(cid);
+      this._playerContacts.delete(cid);
+      this.emitObjectEvent(cid, "destroyed", []);
+      this._objectEvents.delete(cid);
+      this.hierarchy.remove(child);
+      this._events.emit("objectRemoved", [child]);
+    }
     this._all.delete(id);
     this._playerContacts.delete(id);
     this.emitObjectEvent(id, "destroyed", []);
     this._objectEvents.delete(id);
+    this.hierarchy.remove(ro);
     this._events.emit("objectRemoved", [ro]);
   }
 
