@@ -693,7 +693,7 @@ export class GameRuntime {
       return removed;
     };
 
-    inv.has = (name: string, count: number = 1): boolean => items.find(i => i.name === name)?.count >= count ?? false;
+    inv.has = (name: string, count: number = 1): boolean => (items.find(i => i.name === name)?.count ?? 0) >= count;
     inv.get = (name: string): InventoryItem | null => items.find(i => i.name === name) ?? null;
     inv.equip = (name: string | null): boolean => {
       if (name == null) { equippedId = null; return true; }
