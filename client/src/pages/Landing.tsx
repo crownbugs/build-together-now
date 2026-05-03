@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Code2, Gamepad2, Users, Zap } from "lucide-react";
 // Change the old import to this:
-import heroImage from "/workspaces/build-together-now/dist/public/assets/Game_engine_editor_interface_23dc5ed5-BLofFlzR.png";
+import heroImage from "@/public/Game_engine_editor_interface_23dc5ed5-BLofFlzR.png";
 
 import { Link } from "wouter";
 
