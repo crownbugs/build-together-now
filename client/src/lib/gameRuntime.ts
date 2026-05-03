@@ -28,9 +28,8 @@ export type ObjectProperties = {
   transparency: number;
   mass: number;
   friction: number;
-  gravityEnabled: boolean;
-  gravityStrength: number;
-  gravityRadius: number;
+  /** Gravity source settings: boolean to enable with defaults, or object with strength/radius */
+  gravity?: { enabled: boolean; strength: number; radius: number } | boolean;
   /** Auto-rotation speed in radians per second (Y axis). Set this and it rotates automatically! */
   autoRotateY?: number;
   /** Auto-bob amplitude and speed. Set this and it bobs up and down automatically! */
@@ -43,15 +42,13 @@ export type ObjectProperties = {
   autoMove?: { direction: Vec3; speed: number };
 };
 
-export const DEFAULT_PROPERTIES: ObjectProperties = {
+export const DEFAULT_PROPERTIES = {
   anchored: true,
   canCollide: true,
   transparency: 0,
   mass: 1,
   friction: 0.4,
-  gravityEnabled: false,
-  gravityStrength: 9.81,
-  gravityRadius: 30,
+  gravity: { enabled: false, strength: 9.81, radius: 30 },
 };
 
 /** Events a script can subscribe to on a single object via `obj.on(...)`. */
@@ -73,9 +70,6 @@ export type RuntimeObject = {
   transparency: number;
   mass: number;
   friction: number;
-  gravityEnabled: boolean;
-  gravityStrength: number;
-  gravityRadius: number;
   velocity: Vec3;
   isPickup?: boolean;
   pickupName?: string;
@@ -97,19 +91,26 @@ export type RuntimeObject = {
   on: (event: ObjectEventName, fn: (...args: any[]) => void) => () => void;
   off: (event: ObjectEventName, fn: (...args: any[]) => void) => void;
   GetPropertyChangedSignal: (property: string) => EventsAPI;
-  /** Gravity sub‑object: { enabled, strength, radius } – can also be set directly with a boolean. */
+
+  /** Gravity source settings and per‑source exclusions. 
+   *  - obj.gravity = true/false enables/disables this object's own gravity.
+   *  - obj.gravity = { strength: x, radius: y } sets its gravity parameters.
+   *  - For any other object with name "sourceName", obj.gravity.sourceName = false excludes that source's gravity.
+   *  - Example: player.gravity.planet1 = false stops the planet named "planet1" from affecting the player.
+   */
   gravity: {
     enabled: boolean;
     strength: number;
     radius: number;
+    [sourceName: string]: any; // to allow dynamic exclusion flags
   };
-  /** Exclude another object from being affected by this object's gravity. */
-  excludeFromGravity: (obj: RuntimeObject | RuntimePlayer) => void;
-  /** Remove exclusion, so the object is affected by this gravity source again. */
-  includeInGravity: (obj: RuntimeObject | RuntimePlayer) => void;
-  /** Internal: set of excluded object IDs */
-  _gravityExcludeSet: Set<string>;
+
+  /** INTERNAL: actual gravity source data (enabled, strength, radius) */
+  _gravitySource: { enabled: boolean; strength: number; radius: number };
+  /** INTERNAL: exclusions (source name -> excluded) */
+  _gravityExclude: Map<string, boolean>;
 };
+
 export type InventoryItem = {
   id: string;
   name: string;
@@ -132,7 +133,7 @@ export type PlayerInventory = {
 };
 
 export type RuntimePlayer = {
-  id: string;
+  id: string;  // internal ID, not exposed to scripts
   username: string;
   color: string;
   position: Vec3;
@@ -153,6 +154,13 @@ export type RuntimePlayer = {
   heal: (n: number) => void;
   teleport: (x: number, y: number, z: number) => void;
   respawn: () => void;
+
+  /** Gravity exclusions: player.gravity.sourceName = false excludes that source's gravity. */
+  gravity: {
+    [sourceName: string]: any;
+  };
+  /** INTERNAL */
+  _gravityExclude: Map<string, boolean>;
 };
 
 export type RuntimeInput = {
@@ -246,35 +254,20 @@ export class EventBus<T extends Record<string, any[]>> {
   emit<K extends keyof T>(event: K, args: T[K], onError?: (e: any, fn: Function) => void): void {
     const s = this.subs.get(event);
     if (!s) return;
-    
-    // Create a copy to avoid issues if handlers modify the set during iteration
     const handlers = Array.from(s);
-    
     for (const fn of handlers) {
-      try { 
-        (fn as any)(...args); 
-      } catch (e) { 
-        onError?.(e, fn); 
-      }
+      try { (fn as any)(...args); } catch (e) { onError?.(e, fn); }
     }
   }
 
-  /** Create a simplified channel for a specific event key */
   createChannel<K extends keyof T>(event: K): EventChannel<T[K]> {
-    const self = this;
     return {
-      on(fn: (...args: T[K]) => void): () => void {
-        return self.on(event, fn);
-      },
-      off(fn: (...args: T[K]) => void): void {
-        self.off(event, fn);
-      }
+      on: (fn) => this.on(event, fn),
+      off: (fn) => this.off(event, fn)
     };
   }
 
-  clear() { 
-    this.subs.clear(); 
-  }
+  clear() { this.subs.clear(); }
 }
 
 // Internal only - not exposed to scripts
@@ -353,6 +346,8 @@ export type GameAPI = {
     canCollide?: boolean;
     /** Optional anchored flag override (defaults to false for created parts). */
     anchored?: boolean;
+    /** Initial gravity settings (boolean or object) */
+    gravity?: boolean | { enabled?: boolean; strength?: number; radius?: number };
   }) => RuntimeObject;
   destroy: (objOrName: RuntimeObject | string) => void;
   /** Cast a ray through the world. Returns the closest collidable hit (or null). */
@@ -392,8 +387,6 @@ export type CompiledScript = {
 //  IMPROVED SCRIPT EVALUATION (limited sandbox - WARNING: not fully secure)
 // ----------------------------------------------------------------------
 function safeEval(code: string, context: Record<string, any>): (api: GameAPI) => void {
-  // In a real production environment, use a proper sandbox like 'vm2' (Node) or an iframe + postMessage (browser).
-  // This simple proxy blocks access to dangerous globals but is not 100% secure.
   const globalProxy = new Proxy({} as any, {
     get(_, prop) {
       if (prop in context) return context[prop];
@@ -415,7 +408,6 @@ function safeEval(code: string, context: Record<string, any>): (api: GameAPI) =>
 
 export function compileScript(code: string, name: string): CompiledScript {
   try {
-    // Use safeEval instead of raw AsyncFunction
     const run = safeEval(code, {});
     return { name, run };
   } catch (e: any) {
@@ -442,15 +434,23 @@ function clamp01(n: number) { return Math.max(0, Math.min(1, n)); }
 function readProperties(o: GameObject): ObjectProperties {
   const p = (o.properties ?? {}) as Partial<ObjectProperties>;
   const isLightOrSpawn = o.type === "light" || o.type === "spawn";
+  // Convert legacy fields if they exist
+  let gravity = p.gravity;
+  if (!gravity && (p as any).gravityEnabled !== undefined) {
+    gravity = {
+      enabled: (p as any).gravityEnabled,
+      strength: (p as any).gravityStrength ?? 9.81,
+      radius: (p as any).gravityRadius ?? 30,
+    };
+  }
+  if (!gravity) gravity = { enabled: false, strength: 9.81, radius: 30 };
   return {
     anchored: p.anchored ?? true,
     canCollide: p.canCollide ?? !isLightOrSpawn,
     transparency: clamp01(p.transparency ?? 0),
-    mass: p.mass ?? DEFAULT_PROPERTIES.mass,
-    friction: p.friction ?? DEFAULT_PROPERTIES.friction,
-    gravityEnabled: p.gravityEnabled ?? false,
-    gravityStrength: p.gravityStrength ?? DEFAULT_PROPERTIES.gravityStrength,
-    gravityRadius: p.gravityRadius ?? DEFAULT_PROPERTIES.gravityRadius,
+    mass: p.mass ?? 1,
+    friction: p.friction ?? 0.4,
+    gravity: gravity as any,
     autoRotateY: p.autoRotateY,
     autoBob: p.autoBob,
     autoFollow: p.autoFollow,
@@ -529,9 +529,42 @@ function createStubInventory(): PlayerInventory {
   };
 }
 
+// Helper to create a gravity proxy object for both RuntimeObject and RuntimePlayer
+function createGravityProxy(
+  sourceData: { enabled: boolean; strength: number; radius: number },
+  exclusions: Map<string, boolean>
+): any {
+  const target = {
+    get enabled() { return sourceData.enabled; },
+    set enabled(v: boolean) { sourceData.enabled = v; },
+    get strength() { return sourceData.strength; },
+    set strength(v: number) { sourceData.strength = v; },
+    get radius() { return sourceData.radius; },
+    set radius(v: number) { sourceData.radius = v; },
+  };
+  return new Proxy(target, {
+    get(_, prop) {
+      if (prop === 'enabled' || prop === 'strength' || prop === 'radius') {
+        return Reflect.get(target, prop);
+      }
+      // Exclusion by source name
+      return exclusions.get(String(prop)) ?? true; // default true (affected)
+    },
+    set(_, prop, value) {
+      if (prop === 'enabled' || prop === 'strength' || prop === 'radius') {
+        Reflect.set(target, prop, value);
+        return true;
+      }
+      // Setting ex: player.gravity.planet1 = false
+      exclusions.set(String(prop), Boolean(value));
+      return true;
+    }
+  });
+}
+
 export class GameRuntime {
   private _all = new Map<string, RuntimeObject>();
-  private _autoPropObjects = new Set<RuntimeObject>(); // performance: only objects with active auto-properties
+  private _autoPropObjects = new Set<RuntimeObject>();
   objectList: RuntimeObject[] = [];
   objects: Record<string, RuntimeObject> = {};
   workspace: Record<string, RuntimeObject> = {};
@@ -545,7 +578,7 @@ export class GameRuntime {
   private _stateApi: RuntimeState | null = null;
   player: RuntimePlayer;
   private _prevKeys: Record<string, boolean> = {};
-  private _timers: { fn: () => void; nextAt: number; interval: number; once: boolean; dispose?: () => void }[] = [];
+  private _timers: { fn: () => void; nextAt: number; interval: number; once: boolean }[] = [];
   private _tweens = new TweenManager();
   private _keyDownHandlers = new Map<string, Set<() => void>>();
   private _keyUpHandlers = new Map<string, Set<() => void>>();
@@ -585,6 +618,7 @@ export class GameRuntime {
     for (const o of snap) {
       const props = readProperties(o);
       const container = this.normalizeContainer(o.container);
+      const gravitySource = typeof props.gravity === 'boolean' ? { enabled: props.gravity, strength: 9.81, radius: 30 } : props.gravity || { enabled: false, strength: 9.81, radius: 30 };
       const rawRo: RuntimeObject = {
         id: o.id,
         name: o.name,
@@ -596,8 +630,17 @@ export class GameRuntime {
         scale: { x: o.scaleX ?? 1, y: o.scaleY ?? 1, z: o.scaleZ ?? 1 },
         color: o.color ?? "#888888",
         visible: true,
-        ...props,
+        anchored: props.anchored,
+        canCollide: props.canCollide,
+        transparency: props.transparency,
+        mass: props.mass,
+        friction: props.friction,
         velocity: { x: 0, y: 0, z: 0 },
+        autoRotateY: props.autoRotateY,
+        autoBob: props.autoBob,
+        autoFollow: props.autoFollow,
+        autoSpin: props.autoSpin,
+        autoMove: props.autoMove,
         on: () => () => {},
         off: () => {},
         parentId: null,
@@ -605,10 +648,11 @@ export class GameRuntime {
         findFirstChild: () => null,
         setParent: () => {},
         GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
-        _gravityExcludeSet: new Set(),
-        excludeFromGravity: () => {},
-        includeInGravity: () => {},
+        _gravitySource: { ...gravitySource },
+        _gravityExclude: new Map(),
       };
+      // Add gravity proxy
+      (rawRo as any).gravity = createGravityProxy(rawRo._gravitySource, rawRo._gravityExclude);
       const ro = this.mountObjectEvents(rawRo);
       this._all.set(ro.id, ro);
       if (this.hasAutoProperties(ro)) this._autoPropObjects.add(ro);
@@ -620,6 +664,9 @@ export class GameRuntime {
       ? { x: spawnObj.position.x, y: spawnObj.position.y + 1.2, z: spawnObj.position.z }
       : { x: 0, y: 1, z: 4 };
 
+    // Create player with gravity exclusion map
+    const playerExclude = new Map<string, boolean>();
+    const playerGravityProxy = createGravityProxy({ enabled: false, strength: 0, radius: 0 }, playerExclude);
     this.player = {
       id: newId(),
       username,
@@ -641,6 +688,8 @@ export class GameRuntime {
       heal: () => {},
       teleport: () => {},
       respawn: () => {},
+      gravity: playerGravityProxy,
+      _gravityExclude: playerExclude,
     };
 
     this.mountPlayerInventory();
@@ -757,69 +806,35 @@ export class GameRuntime {
     const id = raw.id;
     const propertyEvents = new Map<string, EventBus<Record<"changed", [property: string, newValue: any, oldValue: any]>>>();
 
-    // Gravity helper methods (wired to the raw object)
-    raw.excludeFromGravity = (obj: RuntimeObject | RuntimePlayer) => {
-      raw._gravityExcludeSet.add(obj.id);
-    };
-    raw.includeInGravity = (obj: RuntimeObject | RuntimePlayer) => {
-      raw._gravityExcludeSet.delete(obj.id);
-    };
-
-    // Create the proxy that handles the `gravity` property directly
     const proxy = new Proxy(raw, {
-      get(target, prop, receiver) {
-        if (prop === "gravity") {
-          // Return a live object with getters/setters that target the underlying properties
-          return {
-            get enabled() { return target.gravityEnabled; },
-            set enabled(v: boolean) { target.gravityEnabled = v; },
-            get strength() { return target.gravityStrength; },
-            set strength(v: number) { target.gravityStrength = v; },
-            get radius() { return target.gravityRadius; },
-            set radius(v: number) { target.gravityRadius = v; },
-          };
-        }
-        const value = Reflect.get(target, prop, receiver);
-        // Bind methods to the proxy instance when needed
-        if (typeof value === "function" && (prop === "on" || prop === "off" || prop === "setParent" || prop === "findFirstChild" || prop === "GetPropertyChangedSignal" || prop === "excludeFromGravity" || prop === "includeInGravity")) {
-          return value.bind(receiver);
-        }
-        return value;
-      },
-      set(target, prop, value, receiver) {
-        if (prop === "gravity") {
-          // Handle `obj.gravity = true` or `obj.gravity = { enabled, strength, radius }`
-          if (typeof value === "boolean") {
-            target.gravityEnabled = value;
-          } else if (value && typeof value === "object") {
-            if (value.enabled !== undefined) target.gravityEnabled = value.enabled;
-            if (value.strength !== undefined) target.gravityStrength = value.strength;
-            if (value.radius !== undefined) target.gravityRadius = value.radius;
-          }
-          // Notify property changed signal for "gravity" (optional)
-          const generalBus = this._objectEvents.get(id);
-          if (generalBus) generalBus.emit("changed", ["gravity", value, undefined]);
-          return true;
-        }
-        const oldValue = Reflect.get(target, prop, receiver);
+      set: (target, prop, value) => {
+        const propName = prop as string;
+        const oldValue = (target as any)[propName];
         if (oldValue !== value) {
-          Reflect.set(target, prop, value, receiver);
-          // Fire property changed signals
-          const propBus = propertyEvents.get(prop as string);
-          if (propBus) propBus.emit("changed", [prop as string, value, oldValue]);
+          (target as any)[propName] = value;
+          const propBus = propertyEvents.get(propName);
+          if (propBus) propBus.emit("changed", [propName, value, oldValue]);
           const generalBus = this._objectEvents.get(id);
-          if (generalBus) generalBus.emit("changed", [prop as string, value, oldValue]);
-          // Update auto-property tracking
-          if (["autoRotateY", "autoBob", "autoFollow", "autoSpin", "autoMove"].includes(prop as string)) {
+          if (generalBus) generalBus.emit("changed", [propName, value, oldValue]);
+          if (["autoRotateY", "autoBob", "autoFollow", "autoSpin", "autoMove"].includes(propName)) {
             if (value !== undefined) this._autoPropObjects.add(proxy);
             else this._autoPropObjects.delete(proxy);
           }
+          // Handle gravity object assignment
+          if (propName === "gravity") {
+            if (typeof value === "boolean") {
+              (target as any)._gravitySource.enabled = value;
+            } else if (value && typeof value === "object") {
+              if (value.enabled !== undefined) (target as any)._gravitySource.enabled = value.enabled;
+              if (value.strength !== undefined) (target as any)._gravitySource.strength = value.strength;
+              if (value.radius !== undefined) (target as any)._gravitySource.radius = value.radius;
+            }
+          }
         }
         return true;
-      }.bind(this)
+      }
     });
 
-    // Event methods (need to refer to the proxy's own event bus)
     proxy.on = (event, fn) => {
       let bus = this._objectEvents.get(id);
       if (!bus) { bus = new EventBus(); this._objectEvents.set(id, bus); }
@@ -834,7 +849,6 @@ export class GameRuntime {
       return { on: (event: any, fn: any) => bus!.on(event, fn), off: (event: any, fn: any) => bus!.off(event, fn) };
     };
 
-    // Hierarchy integration
     const hi = this.hierarchy;
     const all = this._all;
     Object.defineProperty(proxy, "children", {
@@ -862,7 +876,9 @@ export class GameRuntime {
     bus.emit(event as any, args, (e, fn) => this.pushLog(`obj.on("${event}") error: ${formatErr(e)}`));
   }
 
-  private createInternal(opts: { name?: string; primitiveType?: "cube" | "sphere" | "cylinder" | "plane"; container?: ContainerName; position?: Vec3; color?: string; parentId?: string | null; canCollide?: boolean; anchored?: boolean; }): RuntimeObject {
+  private createInternal(opts: { name?: string; primitiveType?: "cube" | "sphere" | "cylinder" | "plane"; container?: ContainerName; position?: Vec3; color?: string; parentId?: string | null; canCollide?: boolean; anchored?: boolean; gravity?: boolean | { enabled?: boolean; strength?: number; radius?: number } }): RuntimeObject {
+    const gravityInput = opts.gravity !== undefined ? opts.gravity : false;
+    const gravitySource = typeof gravityInput === 'boolean' ? { enabled: gravityInput, strength: 9.81, radius: 30 } : { enabled: gravityInput?.enabled ?? false, strength: gravityInput?.strength ?? 9.81, radius: gravityInput?.radius ?? 30 };
     const raw: RuntimeObject = {
       id: newId(),
       name: opts.name ?? `Part_${this._all.size + 1}`,
@@ -874,9 +890,11 @@ export class GameRuntime {
       scale: { x: 1, y: 1, z: 1 },
       color: opts.color ?? "#88aaff",
       visible: true,
-      ...DEFAULT_PROPERTIES,
       anchored: opts.anchored ?? false,
-      canCollide: opts.canCollide ?? DEFAULT_PROPERTIES.canCollide,
+      canCollide: opts.canCollide ?? true,
+      transparency: 0,
+      mass: 1,
+      friction: 0.4,
       velocity: { x: 0, y: 0, z: 0 },
       on: () => () => {},
       off: () => {},
@@ -885,10 +903,10 @@ export class GameRuntime {
       findFirstChild: () => null,
       setParent: () => {},
       GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
-      _gravityExcludeSet: new Set(),
-      excludeFromGravity: () => {},
-      includeInGravity: () => {},
+      _gravitySource: gravitySource,
+      _gravityExclude: new Map(),
     };
+    (raw as any).gravity = createGravityProxy(raw._gravitySource, raw._gravityExclude);
     const ro = this.mountObjectEvents(raw);
     this._all.set(ro.id, ro);
     if (opts.parentId) {
@@ -918,9 +936,6 @@ export class GameRuntime {
       transparency: tpl.transparency,
       mass: tpl.mass,
       friction: tpl.friction,
-      gravityEnabled: tpl.gravityEnabled,
-      gravityStrength: tpl.gravityStrength,
-      gravityRadius: tpl.gravityRadius,
       velocity: { x: 0, y: 0, z: 0 },
       on: () => () => {},
       off: () => {},
@@ -929,10 +944,10 @@ export class GameRuntime {
       findFirstChild: () => null,
       setParent: () => {},
       GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
-      _gravityExcludeSet: new Set(),
-      excludeFromGravity: () => {},
-      includeInGravity: () => {},
+      _gravitySource: { ...(tpl as any)._gravitySource },
+      _gravityExclude: new Map(),
     };
+    (raw as any).gravity = createGravityProxy(raw._gravitySource, raw._gravityExclude);
     const ro = this.mountObjectEvents(raw);
     this._all.set(ro.id, ro);
     this.rebuildIndexes();
@@ -944,7 +959,6 @@ export class GameRuntime {
   private removeObject(id: string) {
     const ro = this._all.get(id);
     if (!ro) return;
-    // Cascade destroy descendants
     for (const cid of this.hierarchy.descendantIds(id)) {
       const child = this._all.get(cid);
       if (!child) continue;
@@ -1030,7 +1044,8 @@ export class GameRuntime {
         color: opts.color,
         parentId: opts.parent ? opts.parent.id : null,
         canCollide: opts.canCollide,
-        anchored: opts.anchored
+        anchored: opts.anchored,
+        gravity: opts.gravity
       });
       if (opts.rotation) Object.assign(ro.rotation, opts.rotation);
       if (opts.scale) Object.assign(ro.scale, opts.scale);
@@ -1039,7 +1054,7 @@ export class GameRuntime {
     };
     const raycastFn = (origin: Vec3, direction: Vec3, maxDistance = 100, params?: RaycastParams) => raycastWorld(this._all.values(), origin, direction, maxDistance, params);
     const networkApi = { server: this.network.server, client: this.network.client };
-    const spawn = (templateName: string, overrides?: Partial<RuntimeObject>): RuntimeObject | null => { const tpl = this.replicatedStorage[templateName]; if (!tpl) { this.pushLog(`spawn(): no ReplicatedStorage template named "${templateName}"`); return null; } const ro = this.cloneTemplateInto(tpl, "Workspace", overrides?.position ? { ...tpl.position, ...overrides.position } : undefined); if (overrides) { if (overrides.name) { ro.name = overrides.name; this.rebuildIndexes(); } if (overrides.rotation) Object.assign(ro.rotation, overrides.rotation); if (overrides.scale) Object.assign(ro.scale, overrides.scale); if (overrides.color != null) ro.color = overrides.color; if (overrides.visible != null) ro.visible = overrides.visible; if (overrides.anchored != null) ro.anchored = overrides.anchored; if (overrides.canCollide != null) ro.canCollide = overrides.canCollide; if (overrides.transparency != null) ro.transparency = overrides.transparency; if (overrides.mass != null) ro.mass = overrides.mass; if (overrides.friction != null) ro.friction = overrides.friction; if (overrides.gravityEnabled != null) ro.gravityEnabled = overrides.gravityEnabled; if (overrides.gravityStrength != null) ro.gravityStrength = overrides.gravityStrength; if (overrides.gravityRadius != null) ro.gravityRadius = overrides.gravityRadius; if (overrides.velocity) Object.assign(ro.velocity, overrides.velocity); } return ro; };
+    const spawn = (templateName: string, overrides?: Partial<RuntimeObject>): RuntimeObject | null => { const tpl = this.replicatedStorage[templateName]; if (!tpl) { this.pushLog(`spawn(): no ReplicatedStorage template named "${templateName}"`); return null; } const ro = this.cloneTemplateInto(tpl, "Workspace", overrides?.position ? { ...tpl.position, ...overrides.position } : undefined); if (overrides) { if (overrides.name) { ro.name = overrides.name; this.rebuildIndexes(); } if (overrides.rotation) Object.assign(ro.rotation, overrides.rotation); if (overrides.scale) Object.assign(ro.scale, overrides.scale); if (overrides.color != null) ro.color = overrides.color; if (overrides.visible != null) ro.visible = overrides.visible; if (overrides.anchored != null) ro.anchored = overrides.anchored; if (overrides.canCollide != null) ro.canCollide = overrides.canCollide; if (overrides.transparency != null) ro.transparency = overrides.transparency; if (overrides.mass != null) ro.mass = overrides.mass; if (overrides.friction != null) ro.friction = overrides.friction; if (overrides.velocity) Object.assign(ro.velocity, overrides.velocity); } return ro; };
     const destroy = (target: RuntimeObject | string) => { if (typeof target === "string") { for (const ro of this._all.values()) if (ro.name === target || ro.id === target) { this.removeObject(ro.id); this.rebuildIndexes(); return; } return; } this.removeObject(target.id); this.rebuildIndexes(); };
     const guiText = (id: string, text: string, opts?: Partial<Omit<GuiElement, "id" | "kind" | "text">>) => { const prev = this.gui.get(id); const el: GuiElement = { id, kind: "text", text, x: opts?.x ?? prev?.x ?? 0, y: opts?.y ?? prev?.y ?? 0, anchor: opts?.anchor ?? prev?.anchor ?? "tl", color: opts?.color ?? prev?.color ?? "#ffffff", size: opts?.size ?? prev?.size ?? 16, bg: opts?.bg ?? prev?.bg }; this.gui.set(id, el); this.guiVersion++; };
     const guiButton = (id: string, text: string, opts: Partial<Omit<GuiElement, "id" | "kind" | "text">> | undefined, onClick?: (game: GameAPI) => void) => { const prev = this.gui.get(id); const el: GuiElement = { id, kind: "button", text, x: opts?.x ?? prev?.x ?? 16, y: opts?.y ?? prev?.y ?? 16, anchor: opts?.anchor ?? prev?.anchor ?? "tl", color: opts?.color ?? prev?.color ?? "#ffffff", size: opts?.size ?? prev?.size ?? 14, bg: opts?.bg ?? prev?.bg ?? "rgba(30,40,60,0.85)", onClick: onClick ?? prev?.onClick }; this.gui.set(id, el); this.guiVersion++; };
@@ -1147,7 +1162,6 @@ export class GameRuntime {
       }
     }
 
-    // Player auto‑face movement
     if (this.player.autoFaceMovement) {
       const inputMag = Math.hypot(this.input.moveX, this.input.moveZ);
       if (inputMag > 0.01) {
@@ -1203,7 +1217,6 @@ export class GameRuntime {
     this._events.emit("replication", [dt, this.time], (e, fn) => this.pushLog(`runService.replication error: ${formatErr(e)}`));
 
     // ========== PHYSICS PHASE ==========
-    // Update auto‑properties that affect position/movement (after tweens, before physics)
     this.updateAutoProperties(dt);
 
     const gravityVec = this.computeGravity(p.position, p);
@@ -1256,7 +1269,6 @@ export class GameRuntime {
     p.position.y += p.velocity.y * dt;
     p.position.z += p.velocity.z * dt;
 
-    // Object movement & gravity
     for (const o of this.objectList) {
       if (o.anchored || o.container !== "Workspace") continue;
       const og = this.computeGravity(o.position, o);
@@ -1268,7 +1280,6 @@ export class GameRuntime {
       o.position.z += o.velocity.z * dt;
     }
 
-    // Player vs object collisions (with impulse exchange)
     for (const o of this.objectList) {
       if (!o.visible || !o.canCollide) continue;
       if (o.type === "light" || o.type === "spawn") continue;
@@ -1288,7 +1299,6 @@ export class GameRuntime {
     } else if (p.position.y > 1.001) p.onGround = false;
 
     this.runTouchSweep();
-    // Object-vs-object collisions (handles both sides)
     resolveObjectCollisions(this.objectList);
     this._events.emit("physics", [dt, this.time], (e, fn) => this.pushLog(`runService.physics error: ${formatErr(e)}`));
 
@@ -1337,14 +1347,14 @@ export class GameRuntime {
   private computeGravity(point: Vec3, subject: RuntimeObject | RuntimePlayer): Vec3 {
     let bestMag = 0, best: Vec3 | null = null;
     for (const o of this.objectList) {
-      if (!o.gravityEnabled) continue;
-      if (subject.id === o.id) continue;
-      // Skip if the subject is excluded from this source's gravity
-      if (o._gravityExcludeSet.has(subject.id)) continue;
+      const src = (o as any)._gravitySource;
+      if (!src.enabled) continue;
+      // Check if subject excludes this source by name
+      if (subject.gravity && subject.gravity[o.name] === false) continue;
       const { surfaceDistance, dirToCenter, surfaceRadius } = pointVsObjectSurface(point, o);
-      if (surfaceDistance > o.gravityRadius) continue;
+      if (surfaceDistance > src.radius) continue;
       const r = Math.max(surfaceRadius, surfaceRadius + Math.max(0, surfaceDistance));
-      const accel = (o.gravityStrength * surfaceRadius * surfaceRadius) / (r * r);
+      const accel = (src.strength * surfaceRadius * surfaceRadius) / (r * r);
       if (accel > bestMag) { bestMag = accel; best = { x: dirToCenter.x * accel, y: dirToCenter.y * accel, z: dirToCenter.z * accel }; }
     }
     return best || { x: 0, y: -(this.physics.gravity || 9.81), z: 0 };
@@ -1367,7 +1377,6 @@ export class GameRuntime {
           p.velocity.x -= nx * vDotN;
           p.velocity.y -= ny * vDotN;
           p.velocity.z -= nz * vDotN;
-          // Push object back if it's dynamic
           if (!o.anchored) {
             const massRatio = o.mass / (p.mass ?? 1);
             o.velocity.x += nx * vDotN * massRatio;
@@ -1379,7 +1388,6 @@ export class GameRuntime {
       }
       return;
     }
-    // Box collision
     const halfX = (o.scale.x || 1) * 0.5 + pr, halfY = (o.scale.y || 1) * 0.5 + ph, halfZ = (o.scale.z || 1) * 0.5 + pr;
     const dx = p.position.x - o.position.x, dy = p.position.y - o.position.y, dz = p.position.z - o.position.z;
     if (Math.abs(dx) < halfX && Math.abs(dy) < halfY && Math.abs(dz) < halfZ) {
@@ -1416,280 +1424,108 @@ export class GameRuntime {
 }
 
 // ----------------------------------------------------------------------
-//  DEFAULT SCRIPT AND DOCS
+//  DEFAULT SCRIPT AND DOCS (updated for new gravity)
 // ----------------------------------------------------------------------
 export const DEFAULT_SCRIPT = `// Welcome! Clean, consistent API - just .on(fn) for everything!
 
-// ========== RUNSERVICE - SIMPLE .ON(FN) API ==========
-// Each phase runs automatically in the correct order:
-
-runService.input.on((dt) => {
-  // INPUT PHASE: Raw keyboard/mouse processing
-  // Happens first every frame
-});
-
-runService.animation.on((dt) => {
-  // ANIMATION PHASE: Tweens + auto-properties
-  // Handles autoRotate, autoBob, autoFollow, etc.
-});
-
-runService.replication.on((dt) => {
-  // REPLICATION PHASE: Network sync (future)
-});
-
-runService.physics.on((dt) => {
-  // PHYSICS PHASE: Gravity, movement, collisions
-  // Perfect for custom physics
-});
-
-runService.render.on((dt) => {
-  // RENDER PHASE: Camera, visual effects, smoothing
-});
-
-// UPDATE PHASE: Default for game logic
 runService.update.on((dt) => {
-  // Your game logic here: AI, scoring, spawning, timers
   log("Game running at", (1/dt).toFixed(0), "fps");
 });
 
-// ========== GRAVITY SYSTEM - POWERFUL & FLEXIBLE ==========
-// Every object can have its own gravity field!
-
-// Create a planet with gravity
-const planet = create({
-  primitiveType: "sphere",
-  position: { x: 10, y: 10, z: 0 },
-  scale: { x: 3, y: 3, z: 3 },
-  color: "#ffaa66"
+// ========== NEW GRAVITY SYSTEM ==========
+// Every object can have its own gravity field.
+const planet = create({ 
+  primitiveType: "sphere", 
+  position: { x: 10, y: 10, z: 0 }, 
+  scale: { x: 3, y: 3, z: 3 }, 
+  color: "#ffaa66",
+  gravity: true   // enables with default strength=9.81, radius=30
 });
-planet.gravity = true;           // Enable gravity
-planet.gravity.strength = 15;    // Strength of pull
-planet.gravity.radius = 25;      // Range of effect
-
+// Customize gravity parameters:
+planet.gravity.strength = 15;
+planet.gravity.radius = 25;
 // Or set all at once:
-planet.gravity = { enabled: true, strength: 25, radius: 40 };
+planet.gravity = { enabled: true, strength: 20, radius: 40 };
+// Disable planet's own gravity:
+planet.gravity.enabled = false;
 
-// Disable gravity from a specific source for the player
-planet.excludeFromGravity(player);  // Player is not affected by this planet
+// ========== EXCLUDING GRAVITY SOURCES ==========
+// To stop a specific gravity source from affecting an object, set:
+player.gravity.planet1 = false;  // excludes the planet named "planet1"
+// Re-enable:
+player.gravity.planet1 = true;
 
-// Re-enable it
-planet.includeInGravity(player);
-
-// You can also do it on any other object:
-const asteroid = create({ primitiveType: "sphere", position: { x: 5, y: 0, z: 0 } });
-asteroid.gravity.enabled = true;
-asteroid.gravity.strength = 5;
-asteroid.gravity.radius = 10;
-
-// Make the asteroid ignore the planet's gravity
-asteroid.excludeFromGravity(planet);
+// Any object can exclude any source by its name:
+coin.gravity.planet1 = false;
 
 // ========== AUTO-UPDATE PROPERTIES ==========
-// Set these and they update automatically every frame!
+const coin = create({ primitiveType: "sphere", position: { x: 2, y: 2, z: 0 }, color: "#ffd700" });
+coin.autoRotateY = 2;           // rotates automatically
+coin.autoBob = { amplitude: 0.3, speed: 2 }; // bobs up and down
 
-const coin = create({
-  primitiveType: "sphere",
-  position: { x: 2, y: 2, z: 0 },
-  color: "#ffd700"
-});
-coin.autoRotateY = 2;  // Spins automatically!
-coin.autoBob = { amplitude: 0.3, speed: 2 };  // Bobs up and down!
+const enemy = create({ primitiveType: "cube", position: { x: 5, y: 1, z: 5 }, color: "#ff4444" });
+enemy.autoFollow = { target: player, speed: 2 };  // follows player
+enemy.autoSpin = { y: 1.5 };                     // spins while following
 
-const enemy = create({
-  primitiveType: "cube",
-  position: { x: 5, y: 1, z: 5 },
-  color: "#ff4444"
-});
-enemy.autoFollow = { target: player, speed: 2 };  // Follows player!
-enemy.autoSpin = { y: 1.5 };  // Spins while following!
+player.autoFaceMovement = true;  // player faces movement direction
 
-// Player automatically faces movement direction
-player.autoFaceMovement = true;
-
-// ========== EXAMPLE: FALLING BLOCKS ==========
-const floor = create({ primitiveType: "plane", scale: { x: 40, z: 40 }, color: "#222" });
-floor.anchored = true;
-
-function spawnBlock() {
-  const block = create({
-    primitiveType: "cube",
-    position: { x: random(-12, 12), y: 18, z: random(-12, 12) },
-    color: "#ff4444"
-  });
-  block.anchored = false;  // Gravity works automatically!
-  
-  block.on("touched", (other) => {
-    if (other === player) player.takeDamage(100);
-    if (other === floor) destroy(block);
-  });
-}
-
-let timeLeft = 30;
-runService.update.on((dt) => {
-  timeLeft -= dt;
-  gui.text("timer", "Time: " + timeLeft.toFixed(1));
-  if (timeLeft <= 0) log("You win!");
-});
-
-every(0.8, () => spawnBlock());
-log("Game ready! Clean runService API, auto-updates, everything works!");
-
-// ========== HIERARCHY (PARENTING) ==========
-// Every object can be parented like Roblox. Children move with destroy().
-const turret = create({ primitiveType: "cube", position: { x: 0, y: 1, z: 0 }, color: "#888" });
-const barrel = create({ primitiveType: "cylinder", position: { x: 0, y: 1.5, z: 0 }, color: "#444", parent: turret });
-log("turret children:", turret.children.length);  // 1
-// barrel.setParent(null) to detach. destroy(turret) also destroys barrel.
-
-// ========== canCollide WORKS ON EVERYTHING ==========
-const ghostWall = create({ primitiveType: "cube", scale: { x: 4, y: 4, z: 0.2 }, color: "#aaf", canCollide: false });
-// Other parts (and the player) pass right through ghostWall.
-
-// ========== RAYCASTING ==========
-runService.update.on(() => {
-  const hit = raycast(player.position, { x: 0, y: -1, z: 0 }, 5);
-  if (hit) log("ground:", hit.object.name, "@", hit.distance.toFixed(2));
-});
-
-// ========== REPLICATION (server-authoritative stub) ==========
-// Server side: receive client input, broadcast snapshots automatically.
-network.server.on("__input", (msg) => { /* msg.moveX, msg.jump, ... */ });
-network.server.broadcast("hello", { msg: "welcome" });
-// Client side: send custom messages up, listen for snapshots down.
-network.client.on("__snapshot", (snap) => { /* snap.player, snap.objects */ });
-network.client.send("action", { kind: "fire" });
+log("Ready! New gravity system: object.gravity.enabled / strength / radius; exclusions via object.gravity.sourceName = false");
 `;
 
-export const SCRIPTING_DOCS = `# Scripting Guide - Clean API Edition!
+export const SCRIPTING_DOCS = `# Scripting Guide - New Gravity System
 
-## 🎯 Clean, Consistent API
+## 🌍 Gravity API
 
-Every RunService channel uses the same simple .on(fn) pattern:
+Every object can be a gravity source:
 
 \`\`\`js
-runService.input.on((dt) => { /* input processing */ });
-runService.animation.on((dt) => { /* animations */ });
-runService.replication.on((dt) => { /* networking */ });
-runService.physics.on((dt) => { /* physics */ });
-runService.render.on((dt) => { /* rendering */ });
-runService.update.on((dt) => { /* game logic */ });
+const planet = create({ primitiveType: "sphere", gravity: true });
+planet.gravity.strength = 15;   // pull strength
+planet.gravity.radius = 25;     // radius of effect
+
+// Disable gravity of this source
+planet.gravity.enabled = false;
+
+// Set all at once
+planet.gravity = { enabled: true, strength: 20, radius: 40 };
 \`\`\`
 
-No need to specify event names - each channel knows its own event type!
+## ❌ Excluding Gravity Sources
 
-## 📋 Engine Phases (Automatic Order)
-
-The engine processes everything in this exact order every frame:
-
-1. **INPUT** - Keyboard, mouse, input buffering
-2. **ANIMATION** - Tweens + auto-properties (autoRotate, autoBob, etc.)
-3. **REPLICATION** - Network sync (future multiplayer)
-4. **PHYSICS** - Gravity, movement, collisions, touch detection
-5. **RENDER** - Camera, visual smoothing, interpolation
-6. **UPDATE** - Your custom game logic
-
-## ⚡ Auto-Update Properties
-
-Set these properties and they update EVERY FRAME automatically - no code needed!
+To prevent a specific gravity source from affecting an object (player or other object), set that source's name to \`false\` on the object's \`gravity\` property:
 
 \`\`\`js
-const obj = create({ primitiveType: "cube" });
+// Exclude planet named "planet1" from affecting the player
+player.gravity.planet1 = false;
 
-// Automatic rotation (radians per second)
+// Re‑include
+player.gravity.planet1 = true;
+
+// Exclude same planet from affecting a coin
+coin.gravity.planet1 = false;
+\`\`\`
+
+## ⚡ Auto‑Update Properties (still work)
+
+\`\`\`js
 obj.autoRotateY = 2;
-
-// Automatic bobbing up and down
 obj.autoBob = { amplitude: 0.5, speed: 2 };
-
-// Automatic following of a target
 obj.autoFollow = { target: player, speed: 3 };
-
-// Automatic 3D spinning
-obj.autoSpin = { x: 1, y: 2, z: 0.5 };
-
-// Automatic movement in a direction
+obj.autoSpin = { y: 1.5 };
 obj.autoMove = { direction: { x: 1, y: 0, z: 0 }, speed: 2 };
-
-// Player automatically faces movement direction!
 player.autoFaceMovement = true;
 \`\`\`
 
-## 🌍 Gravity System
-
-Every object can be a gravity source with its own strength, radius, and exclusion list.
+## 🎯 RunService Phases
 
 \`\`\`js
-// Create a planet
-const planet = create({ primitiveType: "sphere", scale: { x: 3, y: 3, z: 3 }, position: { x: 10, y: 10, z: 0 } });
-
-// Enable gravity and set properties
-planet.gravity = true;
-planet.gravity.strength = 15;   // pull strength
-planet.gravity.radius = 30;     // radius of effect
-
-// Or set everything at once
-planet.gravity = { enabled: true, strength: 20, radius: 40 };
-
-// Exclude specific objects from being affected by this gravity source
-planet.excludeFromGravity(player);   // player floats freely near planet
-planet.excludeFromGravity(asteroid);
-
-// Re-include them
-planet.includeInGravity(player);
-
-// Check current gravity settings
-log(planet.gravity.enabled, planet.gravity.strength, planet.gravity.radius);
-
-// Multiple gravity sources can coexist – the strongest one at any point wins.
+runService.input.on((dt) => { });
+runService.animation.on((dt) => { });
+runService.replication.on((dt) => { });
+runService.physics.on((dt) => { });
+runService.render.on((dt) => { });
+runService.update.on((dt) => { });
 \`\`\`
 
-## 🎮 Complete Example
-
-\`\`\`js
-// Setup - runs once
-const floor = create({ primitiveType: "plane", scale: { x: 40, z: 40 } });
-floor.anchored = true;
-
-// Auto-rotating collectible
-const coin = create({ primitiveType: "sphere", position: { x: 2, y: 1, z: 0 }, color: "#ffd700" });
-coin.autoRotateY = 2;
-coin.autoBob = { amplitude: 0.3, speed: 2 };
-
-// Game logic (only what's unique to your game!)
-let score = 0;
-gui.text("score", "Score: 0");
-
-runService.update.on((dt) => {
-  if (dist(player, coin) < 1.5) {
-    score++;
-    gui.text("score", "Score: " + score);
-    coin.position = { x: random(-10, 10), y: 2, z: random(-10, 10) };
-  }
-});
-
-// Optional: custom physics
-runService.physics.on((dt) => {
-  // Custom gravity modifications, forces, etc.
-});
-
-log("Game ready! Everything else is automatic!");
-\`\`\`
-
-## 🚀 Benefits
-
-- **Less code** - auto-properties handle repetitive updates
-- **Clean API** - every phase uses the same \`.on(fn)\` pattern
-- **Better performance** - engine optimized internal phases
-- **Predictable order** - phases always run in correct sequence
-- **Flexible** - hook into any phase when you need fine control
-
-## 📝 Notes
-
-- Each phase automatically receives (dt, time) parameters
-- Auto-properties run during the ANIMATION phase (before physics)
-- Gravity runs during PHYSICS phase and supports per-source exclusions
-- The engine handles all physics and collisions automatically
-- Use \`runService.update.on(fn)\` for game logic (most common)
-
-Happy building! 🎉
+All other APIs (parenting, raycast, networking, GUI, inventory, etc.) remain unchanged.
 `;
