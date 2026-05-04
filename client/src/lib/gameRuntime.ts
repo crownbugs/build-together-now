@@ -308,29 +308,12 @@ export type CompiledScript = {
   error?: string;
 };
 
-function safeEval(code: string, context: Record<string, any>): (api: GameAPI) => void {
-  const globalProxy = new Proxy({} as any, {
-    get(_, prop) {
-      if (prop in context) return context[prop];
-      const blocked = ["eval", "Function", "setTimeout", "setInterval", "fetch", "XMLHttpRequest", "localStorage", "sessionStorage", "window", "global", "process"];
-      if (blocked.includes(String(prop))) return undefined;
-      const safeBuiltins = ["Object", "Array", "Math", "Date", "JSON", "String", "Number", "Boolean", "RegExp", "Error", "Map", "Set", "Promise"];
-      if (safeBuiltins.includes(String(prop)) && typeof globalThis[prop as keyof typeof globalThis] === "function") {
-        return globalThis[prop as keyof typeof globalThis];
-      }
-      return undefined;
-    },
-    set() { return true; }
-  });
-  const fnBody = `"use strict"; with (__ctx__) { return (${code}) }`;
-  const factory = new Function("__ctx__", fnBody);
-  const scriptFn = factory(globalProxy);
-  return (api: GameAPI) => scriptFn(api);
-}
-
 export function compileScript(code: string, name: string): CompiledScript {
   try {
-    const run = safeEval(code, {});
+    const run = (api: GameAPI) => {
+      const fn = new Function("api", code);
+      fn(api);
+    };
     return { name, run };
   } catch (e: any) {
     const msg = e?.message ?? String(e);
@@ -358,11 +341,7 @@ function readProperties(o: GameObject): ObjectProperties {
       gravityVal = { strength: p.gravity.strength, radius: p.gravity.radius };
     } else if (p.gravity === true) {
       gravityVal = { strength: 9.81, radius: 30 };
-    } else {
-      gravityVal = false;
     }
-  } else if ((p as any).gravityEnabled === true) {
-    gravityVal = { strength: (p as any).gravityStrength ?? 9.81, radius: (p as any).gravityRadius ?? 30 };
   }
   return {
     anchored: p.anchored ?? true,
@@ -1327,35 +1306,27 @@ export class GameRuntime {
   }
 }
 
-export const DEFAULT_SCRIPT = `// Gravity only comes from objects that have it.
-// No global pull – objects float freely unless a source affects them.
-
-// Create a planet
+export const DEFAULT_SCRIPT = `// No global gravity. Objects only move if pulled by a gravity source.
+// Create a planet with gravity:
 const planet = create({
   primitiveType: "sphere",
   position: { x: 10, y: 5, z: 0 },
   scale: { x: 3, y: 3, z: 3 },
   color: "#44aa44"
 });
+planet.gravity = { strength: 12, radius: 50 };
 
-// Enable gravity: strength 10, radius 100
-planet.gravity = { strength: 10, radius: 100 };
-
-// Exclude the player from this planet's gravity
+// Exclude the player from this planet's gravity:
 planet.gravity.player = false;
 
-// Exclude another object by name
+// Exclude another object by name:
 planet.gravity.myRocket = false;
 
-// Re‑enable the player later
+// Re-enable later:
 planet.gravity.player = true;
+delete planet.gravity.myRocket;  // remove exclusion
 
-// Remove exclusion for myRocket
-delete planet.gravity.myRocket;
-
-// Now player and rocket will be pulled toward the planet.
-
-// Auto‑properties still work
+// Auto-properties still work:
 const coin = create({ primitiveType: "sphere", position: { x: 2, y: 2, z: 0 }, color: "#ffd700" });
 coin.autoRotateY = 2;
 coin.autoBob = { amplitude: 0.3, speed: 2 };
@@ -1366,54 +1337,45 @@ enemy.autoSpin = { y: 1.5 };
 
 player.autoFaceMovement = true;
 
-runService.update.on((dt) => {
-  log("No global gravity – objects only move if a gravity source pulls them.");
+runService.update.on(() => {
+  log("Gravity works only from sources you define.");
 });
 `;
 
 export const SCRIPTING_DOCS = `# Scripting Guide – Gravity Sources Only
 
-## 🌍 How Gravity Works
+## 🌍 No Global Gravity – Only Explicit Sources
 
-**No global gravity.** Objects float in place unless a gravity source pulls them.
-
-A gravity source is any object with \`gravity = { strength, radius }\`.
+Objects float unless a gravity source pulls them. A source is any object with:
 
 \`\`\`js
-const planet = create({ primitiveType: "sphere" });
 planet.gravity = { strength: 12, radius: 50 };
 \`\`\`
 
 - **strength** – acceleration at the surface (m/s²)
-- **radius** – max distance (meters) where gravity affects other objects
+- **radius** – max distance (meters) where gravity affects others
 
-## 🚫 Excluding Targets
+## 🚫 Exclusions
 
-Prevent a specific object (or the player) from being affected by a gravity source:
+Prevent specific objects or the player from being affected:
 
 \`\`\`js
 // Exclude the player
 planet.gravity.player = false;
 
-// Exclude any object by its name
+// Exclude any object by name
 planet.gravity.myRocket = false;
 
-// Re‑enable gravity for that target
+// Re-enable
 planet.gravity.player = true;
 
-// Remove an exclusion completely
+// Remove exclusion
 delete planet.gravity.myRocket;
 \`\`\`
 
-Exclusions are stored per source. A target will not feel any pull from that source while excluded.
+## ⚡ Auto-Update Properties
 
-## 💫 Multiple Sources
-
-If multiple gravity sources affect the same object, only the strongest one (highest acceleration) is applied. Exclusions override.
-
-## 🔧 Auto‑Update Properties
-
-Set once, they update every frame automatically:
+Set once, update every frame automatically:
 
 - \`autoRotateY\` (radians/sec)
 - \`autoBob = { amplitude, speed }\`
@@ -1435,13 +1397,13 @@ runService.update.on((dt) => {});
 
 ## 🧩 Other Features
 
-- **Hierarchy** – \`obj.setParent(parent)\`, \`obj.children\`, \`findFirstChild\`
+- **Hierarchy** – \`obj.setParent(parent)\`, \`obj.children\`
 - **Collisions** – \`canCollide\`, \`touched\` / \`untouched\` events
 - **Raycasting** – \`raycast(origin, direction, maxDistance, params?)\`
 - **Tweening** – \`tween(target, to, duration, easing?)\`
-- **State** – \`state.set("key", "value")\`, \`state.on("key", fn)\`
-- **Inventory** – \`player.inventory.add(...)\`, \`.equip()\`, \`.drop()\`
+- **State** – \`state.set()\`, \`state.on()\`
+- **Inventory** – \`player.inventory.add()\`, \`.equip()\`, \`.drop()\`
 - **GUI** – \`gui.text()\`, \`gui.button()\`
 - **Networking (stub)** – \`network.server.broadcast\`, \`network.client.send\`
 
-Everything else is automatic. Build your universe with precise gravity control.
+Now build your universe with precise gravity control.`;
