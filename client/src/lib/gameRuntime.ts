@@ -44,7 +44,7 @@ export const DEFAULT_PROPERTIES: ObjectProperties = {
 
 export type ObjectEventName = "touched" | "untouched" | "clicked" | "destroyed" | "changed";
 
-// ========== NEW: Emitter (custom events) ==========
+// ========== Emitter (custom events) ==========
 export class Emitter<T extends any[] = any[]> {
   private listeners: Set<(...args: T) => void> = new Set();
   private onceListeners: Set<(...args: T) => void> = new Set();
@@ -87,7 +87,7 @@ export class Emitter<T extends any[] = any[]> {
   }
 }
 
-// ========== NEW: Callable (cross‑script functions) ==========
+// ========== Callable (cross‑script functions) ==========
 export class Callable<TArgs extends any[] = any[], TResult = any> {
   private handler: ((...args: TArgs) => TResult) | null = null;
 
@@ -101,7 +101,7 @@ export class Callable<TArgs extends any[] = any[], TResult = any> {
   }
 }
 
-// ========== NEW: WeakTable (weak keys) ==========
+// ========== WeakTable (weak keys) ==========
 export class WeakTable<K extends object, V> {
   private map = new WeakMap<K, V>();
   set(key: K, value: V): this { this.map.set(key, value); return this; }
@@ -110,7 +110,7 @@ export class WeakTable<K extends object, V> {
   delete(key: K): boolean { return this.map.delete(key); }
 }
 
-// ========== NEW: Class system (metatable‑style OOP) ==========
+// ========== Class system (metatable‑style OOP) ==========
 export class Class {
   static extend<T extends typeof Class>(this: T, name: string, base?: any): any {
     const ctor = function(this: any, props: any = {}) {
@@ -126,7 +126,7 @@ export class Class {
   }
 }
 
-// ========== NEW: TagManager ==========
+// ========== TagManager ==========
 class TagManager {
   private tags = new Map<string, Set<RuntimeObject>>();
 
@@ -157,7 +157,7 @@ class TagManager {
   clear(): void { this.tags.clear(); }
 }
 
-// ========== NEW: TaskScheduler (coroutine‑friendly) ==========
+// ========== TaskScheduler (coroutine‑friendly) ==========
 class TaskScheduler {
   private timers: { fn: () => void; delay: number; repeat: boolean; nextTime: number }[] = [];
 
@@ -239,15 +239,14 @@ export type RuntimeObject = {
   off: (event: ObjectEventName, fn: (...args: any[]) => void) => void;
   GetPropertyChangedSignal: (property: string) => EventsAPI;
   _gravityExclusions: Set<string>;
-  // NEW: Attributes
+  // Attributes
   setAttribute: (key: string, value: any) => void;
   getAttribute: (key: string) => any;
   getAttributes: () => Record<string, any>;
-  // NEW: Connections tracking for auto cleanup
+  // Connections tracking for auto cleanup
   __cleanup: Set<() => void>;
 };
 
-// Rest of types (InventoryItem, PlayerInventory, RuntimePlayer, etc.) unchanged
 export type InventoryItem = {
   id: string;
   name: string;
@@ -496,6 +495,9 @@ export type GameAPI = {
   weakRef: typeof weakRef;
   WeakTable: typeof WeakTable;
   Class: typeof Class;
+  // Internal fields used by module system
+  exports?: any;
+  module?: { exports: any };
 };
 
 export type CompiledScript = {
@@ -509,11 +511,11 @@ function weakRef<T extends object>(obj: T): { get: () => T | null } {
   return { get: () => ref.deref() ?? null };
 }
 
-// Helper functions (unchanged)
+// ========== FIXED compileScript (no backslash escape, adds exports/module) ==========
 export function compileScript(code: string, name: string): CompiledScript {
   try {
+    // Only escape backticks and ${ } – DO NOT escape backslashes
     const safeCode = code
-      .replace(/\\/g, "\\\\")
       .replace(/`/g, "\\`")
       .replace(/\$\{/g, "\\${");
 
@@ -522,6 +524,10 @@ export function compileScript(code: string, name: string): CompiledScript {
     const factory = new AsyncFunction(
       "game",
       `"use strict";
+       // CommonJS support for modules
+       const exports = game.exports || {};
+       const module = game.module || { exports: exports };
+       
        const objects = game.objects;
        const workspace = game.workspace;
        const lighting = game.lighting;
@@ -574,7 +580,7 @@ export function compileScript(code: string, name: string): CompiledScript {
          warn:  (...a) => game.log("[warn]", ...a),
          error: (...a) => game.log("[error]", ...a),
        };
-       ${safeCode}`,
+       ${safeCode}`
     );
 
     return { name, run: factory as (api: GameAPI) => void };
@@ -739,7 +745,7 @@ export class GameRuntime {
   guiVersion = 0;
   runService!: RunServiceAPI;
 
-  // NEW: internal state for added features
+  // internal state for added features
   private tagManager = new TagManager();
   private taskScheduler = new TaskScheduler();
   private modules = new Map<string, any>(); // for require()
@@ -797,16 +803,18 @@ export class GameRuntime {
         const modObj = this._all.get(o.id);
         if (modObj) {
           this.moduleScripts.set(o.name, modObj);
-          // execute module script to get exports
           const script = scripts.find(s => s.name === o.name);
           if (script && script.enabled !== false) {
             try {
               const compiled = compileScript(script.code, script.name);
               if (compiled.run) {
-                const exports: any = {};
-                const modApi = { ...this.buildApi(0), exports };
+                // Create an exports object and a module wrapper
+                const modExports: any = {};
+                const modApi = this.buildApi(0);
+                modApi.exports = modExports;
+                modApi.module = { exports: modExports };
                 compiled.run(modApi);
-                this.modules.set(o.name, exports);
+                this.modules.set(o.name, modExports);
               }
             } catch (e) { this.pushLog(`ModuleScript ${o.name} error: ${formatErr(e)}`); }
           }
@@ -952,8 +960,8 @@ export class GameRuntime {
   private mountObjectEvents(raw: RuntimeObject): RuntimeObject {
     const id = raw.id;
     const propertyEvents = new Map<string, EventBus<Record<"changed", [property: string, newValue: any, oldValue: any]>>>();
-    const attributes = new Map<string, any>(); // for setAttribute/getAttribute
-    const cleanupSet = new Set<() => void>(); // track connections
+    const attributes = new Map<string, any>();
+    const cleanupSet = new Set<() => void>();
 
     const proxy = new Proxy(raw, {
       set: (target, prop, value) => {
@@ -1004,7 +1012,6 @@ export class GameRuntime {
       const old = attributes.get(key);
       if (old !== value) {
         attributes.set(key, value);
-        // emit changed event for "Attribute"
         const generalBus = this._objectEvents.get(id);
         if (generalBus) generalBus.emit("changed", [`Attribute.${key}`, value, old]);
       }
@@ -1030,7 +1037,7 @@ export class GameRuntime {
     };
     hi.add(proxy);
 
-    // Gravity exclusions handling (unchanged)
+    // Gravity exclusions
     let gravityValue: false | { strength: number; radius: number } = raw.gravity === false ? false : (raw.gravity ? { strength: raw.gravity.strength, radius: raw.gravity.radius } : false);
     const exclusions = new Set<string>();
 
@@ -1087,7 +1094,6 @@ export class GameRuntime {
       configurable: true,
     });
 
-    // Store cleanup set on object
     Object.defineProperty(proxy, "__cleanup", {
       value: cleanupSet,
       writable: false,
@@ -1186,7 +1192,6 @@ export class GameRuntime {
   private removeObject(id: string) {
     const ro = this._all.get(id);
     if (!ro) return;
-    // Cleanup all connections
     if (ro.__cleanup) {
       for (const disconnect of ro.__cleanup) disconnect();
       ro.__cleanup.clear();
@@ -1310,7 +1315,6 @@ export class GameRuntime {
     const lerpFn = (a: number, b: number, t: number) => a + (b - a) * t;
     const clampFn = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
-    // NEW APIs
     const tagsApi = {
       add: (obj: RuntimeObject, tag: string) => this.tagManager.addTag(obj, tag),
       remove: (obj: RuntimeObject, tag: string) => this.tagManager.removeTag(obj, tag),
@@ -1321,13 +1325,6 @@ export class GameRuntime {
     const requireModule = (name: string): any => {
       const exports = this.modules.get(name);
       if (exports !== undefined) return exports;
-      // try to find a ModuleScript object
-      const modObj = this.moduleScripts.get(name);
-      if (modObj) {
-        // find corresponding script source (should have been loaded at construction)
-        this.pushLog(`ModuleScript "${name}" not yet loaded`);
-        return null;
-      }
       this.pushLog(`require: module "${name}" not found`);
       return null;
     };
@@ -1401,7 +1398,6 @@ export class GameRuntime {
       clamp: clampFn,
       raycast: raycastFn,
       network: networkApi,
-      // NEW
       Emitter,
       Callable,
       tags: tagsApi,
@@ -1629,7 +1625,6 @@ export class GameRuntime {
       else t.nextAt = this.time + t.interval;
     }
 
-    // Run task scheduler timers (for task.wait/delay)
     this.taskScheduler.step(this.time);
 
     if (p.health <= 0 && (this as any)._lastHealth > 0) { this._events.emit("playerDied", [p], () => {}); p.respawn(); this._events.emit("playerSpawned", [p], () => {}); }
