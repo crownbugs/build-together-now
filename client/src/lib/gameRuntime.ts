@@ -1386,3 +1386,159 @@ export class GameRuntime {
   }
 }
 
+
+export const DEFAULT_SCRIPT = `// Starter script — see Docs panel for the full API.
+
+const planet = create({
+  primitiveType: "sphere",
+  position: { x: 10, y: 5, z: 0 },
+  scale: { x: 3, y: 3, z: 3 },
+  color: "#44aa44",
+});
+planet.gravity = { strength: 12, radius: 50 };
+
+const coin = create({
+  primitiveType: "sphere",
+  position: { x: 2, y: 2, z: 0 },
+  color: "#ffd700",
+});
+coin.autoRotateY = 2;
+coin.autoBob = { amplitude: 0.3, speed: 2 };
+
+player.autoFaceMovement = true;
+
+runService.update.on((dt) => {});
+`;
+
+export const SCRIPTING_DOCS = `# Scripting Reference
+
+The engine handles the clock (~60fps), physics, rendering, input and replication.
+Your scripts handle game logic.
+
+## 1. Create / Destroy
+\`\`\`js
+const box = create({
+  primitiveType: "cube",       // cube | sphere | cylinder | plane
+  position: { x:0, y:1, z:0 },
+  rotation: { x:0, y:0, z:0 },
+  scale:    { x:1, y:1, z:1 },
+  color: "#ff8844",
+  anchored: false,
+  canCollide: true,
+  transparency: 0,
+  parent: someObject,
+});
+destroy(box);                  // cascades to children
+\`\`\`
+
+## 2. Hierarchy
+\`\`\`js
+const turret = create({ primitiveType: "cube" });
+const barrel = create({ primitiveType: "cylinder", parent: turret });
+barrel.setParent(turret);
+turret.findFirstChild("barrel");
+turret.children;               // live array
+\`\`\`
+
+## 3. Player
+\`\`\`js
+player.position / .rotation / .velocity / .up
+player.color, player.size, player.speed, player.jumpPower
+player.health, player.maxHealth
+player.takeDamage(10); player.heal(5); player.respawn();
+player.teleport(x, y, z);
+player.autoFaceMovement = true;     // 3rd-person facing
+player.inventory.add(item); .equip(name); .drop(name);
+\`\`\`
+
+## 4. Input
+\`\`\`js
+keyboard.onPress("e", () => log("E"));
+keyboard.onRelease("e", () => {});
+input.held("w");
+input.moveX; input.moveZ;      // -1..1 (WASD + joystick)
+mouse.onClick((obj) => log(obj?.name));
+obj.on("clicked", () => {});
+\`\`\`
+
+## 5. Auto Properties (engine animates)
+\`\`\`js
+obj.autoRotateY = 2;
+obj.autoBob     = { amplitude: 0.3, speed: 2 };
+obj.autoSpin    = { x:0, y:1, z:0 };
+obj.autoFollow  = { target: player, speed: 3 };
+obj.autoMove    = { direction:{ x:1, y:0, z:0 }, speed: 2 };
+\`\`\`
+
+## 6. Tweens
+\`\`\`js
+tween(obj.position, { x: 10 }, 1.5, "easeInOut");
+tween(obj, { transparency: 1 }, 0.5);
+\`\`\`
+
+## 7. Physics & Gravity
+- Global gravity (\`physics.gravity\`, default 9.81) pulls down.
+- \`gravity = { strength, radius }\` makes an object a gravity source.
+- Exclude target: \`planet.gravity.player = false\` or by object name.
+- \`anchored\` freezes; \`canCollide\` toggles collisions on ALL objects.
+
+## 8. Collisions
+\`\`\`js
+boxA.on("touched",   (other) => log("hit", other.name));
+boxA.on("untouched", (other) => {});
+\`\`\`
+
+## 9. Raycasting
+\`\`\`js
+const hit = raycast(player.position, { x:0, y:-1, z:0 }, 5,
+  { ignore: [player], onlyCanCollide: true });
+if (hit) log(hit.object.name, hit.distance, hit.position, hit.normal);
+\`\`\`
+
+## 10. RunService Phases (fixed order)
+\`\`\`js
+runService.input.on(dt => {});
+runService.animation.on(dt => {});
+runService.replication.on(dt => {});
+runService.physics.on(dt => {});
+runService.render.on(dt => {});
+runService.update.on(dt => {});
+\`\`\`
+
+## 11. State
+\`\`\`js
+state.set("score", "0");
+state.on("score", (val, prev) => log(val));
+state.get("score");
+\`\`\`
+
+## 12. GUI
+\`\`\`js
+const t = gui.text({ text:"Score: 0", anchor:"tl", x:12, y:12, size:16 });
+t.text = "Score: 99";
+gui.button({ text:"Jump", anchor:"br", x:24, y:24, onClick: () => player.respawn() });
+\`\`\`
+Anchors: tl tc tr cl cc cr bl bc br.
+
+## 13. Networking (server-authoritative)
+\`\`\`js
+// Server (ServerScriptService)
+network.server.broadcast("worldUpdate", { t: Date.now() });
+network.server.onInput((playerId, msg) => {});
+
+// Client
+network.client.send("shoot", { dir:{ x:0, y:0, z:1 } });
+network.client.on("worldUpdate", (data) => {});
+\`\`\`
+
+## 14. Containers
+- **Workspace** — live world.
+- **Lighting** — ambient/light setup.
+- **ReplicatedStorage** — templates: \`spawn("Name", overrides?)\`.
+- **ServerScriptService** — server-only authoritative scripts.
+
+## 15. Logging
+\`\`\`js
+log("hello", value);           // visible in the in-game Console
+\`\`\`
+`;
