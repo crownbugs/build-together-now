@@ -1100,23 +1100,10 @@ export class GameRuntime {
       }
     }
 
-    if (this.player.autoFaceMovement) {
-      const inputMag = Math.hypot(this.input.moveX, this.input.moveZ);
-      if (inputMag > 0.01) {
-        const cf = this.cameraForward;
-        const up = this.player.up;
-        const cfDot = cf.x * up.x + cf.y * up.y + cf.z * up.z;
-        let fx = cf.x - up.x * cfDot;
-        let fz = cf.z - up.z * cfDot;
-        const len = Math.hypot(fx, fz);
-        if (len > 0.001) { fx /= len; fz /= len; }
-        const targetYaw = Math.atan2(this.input.moveX, this.input.moveZ);
-        let diff = targetYaw - this.player.rotation.y;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        this.player.rotation.y += diff * Math.min(1, dt * 12);
-      }
-    }
+    // autoFaceMovement is now applied AFTER physics in step() so we can use
+    // the actual world-space movement direction (wantX/wantZ), giving correct
+    // 3rd-person facing — character faces the way they're traveling, not raw
+    // input axes which are camera-relative and rotate with the camera.
   }
 
   private computeGravityForTarget(point: Vec3, targetId: string | null, targetName: string | null, isPlayer: boolean): Vec3 {
@@ -1231,6 +1218,20 @@ export class GameRuntime {
     const upVelDot = p.velocity.x * p.up.x + p.velocity.y * p.up.y + p.velocity.z * p.up.z;
     p.velocity.x = wantX * speed + p.up.x * upVelDot;
     p.velocity.z = wantZ * speed + p.up.z * upVelDot;
+
+    // ===== 3rd-person facing =====
+    // Face the actual world-space movement direction so the character looks
+    // forward when walking forward (regardless of how the camera is oriented).
+    if (p.autoFaceMovement) {
+      const moveMag = Math.hypot(wantX, wantZ);
+      if (moveMag > 0.05) {
+        const targetYaw = Math.atan2(wantX, wantZ);
+        let diff = targetYaw - p.rotation.y;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        p.rotation.y += diff * Math.min(1, dt * 12);
+      }
+    }
 
     if (this.input.jump && p.onGround) {
       const jp = p.jumpPower || 8;
@@ -1385,128 +1386,159 @@ export class GameRuntime {
   }
 }
 
-export const DEFAULT_SCRIPT = `// Welcome! Clean, consistent API - just .on(fn) for everything!
 
-// ========== GRAVITY SYSTEM ==========
-// Global gravity always pulls down (physics.gravity = 9.81 by default)
-// Plus you can add extra gravity sources that can exclude specific targets.
+export const DEFAULT_SCRIPT = `// Starter script — see Docs panel for the full API.
 
 const planet = create({
   primitiveType: "sphere",
   position: { x: 10, y: 5, z: 0 },
   scale: { x: 3, y: 3, z: 3 },
-  color: "#44aa44"
+  color: "#44aa44",
 });
-
-// Make the planet a gravity source (strength 12, radius 50)
 planet.gravity = { strength: 12, radius: 50 };
 
-// Exclude the player from this planet's gravity:
-planet.gravity.player = false;
-
-// Exclude another object by name:
-planet.gravity.myRocket = false;
-
-// Re‑enable for player:
-planet.gravity.player = true;
-
-// Remove exclusion:
-delete planet.gravity.myRocket;
-
-// ========== AUTO-UPDATE PROPERTIES ==========
 const coin = create({
   primitiveType: "sphere",
   position: { x: 2, y: 2, z: 0 },
-  color: "#ffd700"
+  color: "#ffd700",
 });
 coin.autoRotateY = 2;
 coin.autoBob = { amplitude: 0.3, speed: 2 };
 
-const enemy = create({
-  primitiveType: "cube",
-  position: { x: 5, y: 1, z: 5 },
-  color: "#ff4444"
-});
-enemy.autoFollow = { target: player, speed: 2 };
-enemy.autoSpin = { y: 1.5 };
-
 player.autoFaceMovement = true;
 
-// ========== RUNSERVICE PHASES ==========
-runService.input.on((dt) => {});
-runService.animation.on((dt) => {});
-runService.replication.on((dt) => {});
-runService.physics.on((dt) => {});
-runService.render.on((dt) => {});
-runService.update.on((dt) => {
-  log("Game running at", (1/dt).toFixed(0), "fps");
-});
-
-// ========== OTHER FEATURES ==========
-// Hierarchy, collisions, raycast, tween, state, inventory, GUI, networking...
+runService.update.on((dt) => {});
 `;
 
-export const SCRIPTING_DOCS = `# Scripting Guide – Gravity with Global Fallback + Exclusions
+export const SCRIPTING_DOCS = `# Scripting Reference
 
-## 🌍 Gravity System
+The engine handles the clock (~60fps), physics, rendering, input and replication.
+Your scripts handle game logic.
 
-- **Global gravity** always pulls downward (default 9.81). Controlled by \`physics.gravity\`.
-- **Gravity sources** are objects with \`gravity = { strength, radius }\`. They add extra pull toward themselves.
-- When multiple sources affect an object, the **strongest** acceleration wins.
-- If no source affects an object, only **global gravity** applies.
-
-## 🚫 Excluding Targets from a Source
-
-Prevent the player or a specific object from being affected by a gravity source:
-
+## 1. Create / Destroy
 \`\`\`js
-const planet = create({ primitiveType: "sphere" });
-planet.gravity = { strength: 12, radius: 50 };
-
-// Exclude the player
-planet.gravity.player = false;
-
-// Exclude any object by its name
-planet.gravity.myRocket = false;
-
-// Re‑enable
-planet.gravity.player = true;
-
-// Remove exclusion entirely
-delete planet.gravity.myRocket;
+const box = create({
+  primitiveType: "cube",       // cube | sphere | cylinder | plane
+  position: { x:0, y:1, z:0 },
+  rotation: { x:0, y:0, z:0 },
+  scale:    { x:1, y:1, z:1 },
+  color: "#ff8844",
+  anchored: false,
+  canCollide: true,
+  transparency: 0,
+  parent: someObject,
+});
+destroy(box);                  // cascades to children
 \`\`\`
 
-## ⚡ Auto-Update Properties
-
-Set once, update every frame:
-
-- \`autoRotateY\` (radians/sec)
-- \`autoBob = { amplitude, speed }\`
-- \`autoFollow = { target, speed, offset? }\`
-- \`autoSpin = { x?, y?, z? }\`
-- \`autoMove = { direction, speed }\`
-- \`player.autoFaceMovement = true\`
-
-## 📋 RunService Phases (automatic order)
-
+## 2. Hierarchy
 \`\`\`js
-runService.input.on((dt) => {});
-runService.animation.on((dt) => {});
-runService.replication.on((dt) => {});
-runService.physics.on((dt) => {});
-runService.render.on((dt) => {});
-runService.update.on((dt) => {});
+const turret = create({ primitiveType: "cube" });
+const barrel = create({ primitiveType: "cylinder", parent: turret });
+barrel.setParent(turret);
+turret.findFirstChild("barrel");
+turret.children;               // live array
 \`\`\`
 
-## 🧩 Other Features
+## 3. Player
+\`\`\`js
+player.position / .rotation / .velocity / .up
+player.color, player.size, player.speed, player.jumpPower
+player.health, player.maxHealth
+player.takeDamage(10); player.heal(5); player.respawn();
+player.teleport(x, y, z);
+player.autoFaceMovement = true;     // 3rd-person facing
+player.inventory.add(item); .equip(name); .drop(name);
+\`\`\`
 
-- **Hierarchy** – \`obj.setParent(parent)\`, \`obj.children\`
-- **Collisions** – \`canCollide\`, \`touched\` / \`untouched\`
-- **Raycasting** – \`raycast(origin, direction, maxDistance, params?)\`
-- **Tweening** – \`tween(target, to, duration, easing?)\`
-- **State** – \`state.set()\`, \`state.on()\`
-- **Inventory** – \`player.inventory.add()\`, \`.equip()\`, \`.drop()\`
-- **GUI** – \`gui.text()\`, \`gui.button()\`
-- **Networking** – \`network.server.broadcast\`, \`network.client.send\`
+## 4. Input
+\`\`\`js
+keyboard.onPress("e", () => log("E"));
+keyboard.onRelease("e", () => {});
+input.held("w");
+input.moveX; input.moveZ;      // -1..1 (WASD + joystick)
+mouse.onClick((obj) => log(obj?.name));
+obj.on("clicked", () => {});
+\`\`\`
 
-Everything else works as before. Happy building!`;
+## 5. Auto Properties (engine animates)
+\`\`\`js
+obj.autoRotateY = 2;
+obj.autoBob     = { amplitude: 0.3, speed: 2 };
+obj.autoSpin    = { x:0, y:1, z:0 };
+obj.autoFollow  = { target: player, speed: 3 };
+obj.autoMove    = { direction:{ x:1, y:0, z:0 }, speed: 2 };
+\`\`\`
+
+## 6. Tweens
+\`\`\`js
+tween(obj.position, { x: 10 }, 1.5, "easeInOut");
+tween(obj, { transparency: 1 }, 0.5);
+\`\`\`
+
+## 7. Physics & Gravity
+- Global gravity (\`physics.gravity\`, default 9.81) pulls down.
+- \`gravity = { strength, radius }\` makes an object a gravity source.
+- Exclude target: \`planet.gravity.player = false\` or by object name.
+- \`anchored\` freezes; \`canCollide\` toggles collisions on ALL objects.
+
+## 8. Collisions
+\`\`\`js
+boxA.on("touched",   (other) => log("hit", other.name));
+boxA.on("untouched", (other) => {});
+\`\`\`
+
+## 9. Raycasting
+\`\`\`js
+const hit = raycast(player.position, { x:0, y:-1, z:0 }, 5,
+  { ignore: [player], onlyCanCollide: true });
+if (hit) log(hit.object.name, hit.distance, hit.position, hit.normal);
+\`\`\`
+
+## 10. RunService Phases (fixed order)
+\`\`\`js
+runService.input.on(dt => {});
+runService.animation.on(dt => {});
+runService.replication.on(dt => {});
+runService.physics.on(dt => {});
+runService.render.on(dt => {});
+runService.update.on(dt => {});
+\`\`\`
+
+## 11. State
+\`\`\`js
+state.set("score", "0");
+state.on("score", (val, prev) => log(val));
+state.get("score");
+\`\`\`
+
+## 12. GUI
+\`\`\`js
+const t = gui.text({ text:"Score: 0", anchor:"tl", x:12, y:12, size:16 });
+t.text = "Score: 99";
+gui.button({ text:"Jump", anchor:"br", x:24, y:24, onClick: () => player.respawn() });
+\`\`\`
+Anchors: tl tc tr cl cc cr bl bc br.
+
+## 13. Networking (server-authoritative)
+\`\`\`js
+// Server (ServerScriptService)
+network.server.broadcast("worldUpdate", { t: Date.now() });
+network.server.onInput((playerId, msg) => {});
+
+// Client
+network.client.send("shoot", { dir:{ x:0, y:0, z:1 } });
+network.client.on("worldUpdate", (data) => {});
+\`\`\`
+
+## 14. Containers
+- **Workspace** — live world.
+- **Lighting** — ambient/light setup.
+- **ReplicatedStorage** — templates: \`spawn("Name", overrides?)\`.
+- **ServerScriptService** — server-only authoritative scripts.
+
+## 15. Logging
+\`\`\`js
+log("hello", value);           // visible in the in-game Console
+\`\`\`
+`;

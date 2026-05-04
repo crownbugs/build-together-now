@@ -17,6 +17,12 @@ export default function VirtualJoystick({
   const center = useRef({ x: 0, y: 0 });
 
   const start = (e: React.PointerEvent) => {
+    // Critical: stop the pointer from also reaching the R3F <Canvas> /
+    // OrbitControls beneath us. Without this, the same finger that's
+    // driving the joystick also rotates the camera, which made the player
+    // appear to "shake" while turning + moving on touch devices.
+    e.stopPropagation();
+    e.preventDefault();
     const rect = baseRef.current!.getBoundingClientRect();
     center.current = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     activeId.current = e.pointerId;
@@ -26,6 +32,7 @@ export default function VirtualJoystick({
 
   const move = (e: React.PointerEvent) => {
     if (activeId.current !== e.pointerId) return;
+    e.stopPropagation();
     const dx = e.clientX - center.current.x;
     const dy = e.clientY - center.current.y;
     const max = 50;
@@ -38,6 +45,7 @@ export default function VirtualJoystick({
 
   const end = (e: React.PointerEvent) => {
     if (activeId.current !== e.pointerId) return;
+    e.stopPropagation();
     activeId.current = null;
     setThumb({ x: 0, y: 0 });
     onChange(0, 0);
