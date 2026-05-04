@@ -1340,7 +1340,7 @@ export class GameRuntime {
           p.velocity.y -= ny * vDotN;
           p.velocity.z -= nz * vDotN;
           if (!o.anchored) {
-            const massRatio = o.mass / (p.mass ?? 1);
+            const massRatio = o.mass / ((p as any).mass ?? 1);
             o.velocity.x += nx * vDotN * massRatio;
             o.velocity.y += ny * vDotN * massRatio;
             o.velocity.z += nz * vDotN * massRatio;
@@ -1375,7 +1375,7 @@ export class GameRuntime {
         p.velocity.y -= vDotN * ny;
         p.velocity.z -= vDotN * nz;
         if (!o.anchored) {
-          const massRatio = o.mass / (p.mass ?? 1);
+          const massRatio = o.mass / ((p as any).mass ?? 1);
           o.velocity.x += nx * vDotN * massRatio;
           o.velocity.y += ny * vDotN * massRatio;
           o.velocity.z += nz * vDotN * massRatio;
