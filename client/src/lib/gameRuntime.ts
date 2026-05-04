@@ -519,6 +519,10 @@ export class GameRuntime {
   physics: RuntimePhysics = { gravity: 9.81, airDrag: 0 };
   cameraYaw = 0;
   cameraForward: Vec3 = { x: 0, y: 0, z: -1 };
+  // Smoothed horizontal forward basis used for movement input. Decoupled from
+  // the raw per-frame camera vector so input doesn't jitter when the user is
+  // looking near-vertical (top-down) or when OrbitControls damping wobbles.
+  private _moveForward: Vec3 = { x: 0, y: 0, z: -1 };
   time = 0;
   scripts: CompiledScript[] = [];
   logs: string[] = [];
