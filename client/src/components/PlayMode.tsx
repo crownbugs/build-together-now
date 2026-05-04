@@ -258,7 +258,7 @@ function ChaseCameraRig({ runtime }: { runtime: GameRuntime }) {
       enablePan={false}
       minDistance={3}
       maxDistance={10}
-      maxPolarAngle={Math.PI * 0.49}
+      
     />
   );
 }
