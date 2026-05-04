@@ -11,6 +11,7 @@ export type { NetSnapshot, NetInput } from "./runtime/network";
 
 export type Vec3 = { x: number; y: number; z: number };
 
+/** Containers organize objects + scripts by purpose, exactly like Roblox services. */
 export type ContainerName =
   | "Workspace"
   | "Lighting"
@@ -19,17 +20,28 @@ export type ContainerName =
   | "StarterPlayer"
   | "ReplicatedStorage";
 
+/** Per-object physics & rendering properties — editable in the Properties panel
+ *  AND scriptable at runtime (e.g. `game.workspace.Wall.canCollide = false`). */
 export type ObjectProperties = {
   anchored: boolean;
   canCollide: boolean;
   transparency: number;
   mass: number;
   friction: number;
+  /** Gravity source configuration. Set to `{ strength: number, radius: number }` to enable gravity.
+   *  Use `object.gravity.player = false` to exclude the player from this gravity source.
+   *  Use `object.gravity.otherObjectName = false` to exclude a specific object by name.
+   */
   gravity?: false | { strength: number; radius: number };
+  /** Auto-rotation speed in radians per second (Y axis). Set this and it rotates automatically! */
   autoRotateY?: number;
+  /** Auto-bob amplitude and speed. Set this and it bobs up and down automatically! */
   autoBob?: { amplitude: number; speed: number; startY?: number };
+  /** Auto-follow target. Set this and it follows the target automatically! */
   autoFollow?: { target: RuntimeObject | RuntimePlayer; speed: number; offset?: Vec3 };
+  /** Auto-spin (full 3D rotation). Set this and it spins automatically! */
   autoSpin?: { x?: number; y?: number; z?: number };
+  /** Auto-move in a direction. Set this and it moves automatically! */
   autoMove?: { direction: Vec3; speed: number };
 };
 
@@ -42,6 +54,7 @@ export const DEFAULT_PROPERTIES: ObjectProperties = {
   gravity: false,
 };
 
+/** Events a script can subscribe to on a single object via `obj.on(...)`. */
 export type ObjectEventName = "touched" | "untouched" | "clicked" | "destroyed" | "changed";
 
 export type RuntimeObject = {
@@ -64,19 +77,29 @@ export type RuntimeObject = {
   isPickup?: boolean;
   pickupName?: string;
   pickupData?: Record<string, any>;
+  /** Gravity configuration — set to `{ strength: number, radius: number }` to become a gravity source.
+   *  Use `myObject.gravity.player = false` to exclude player from this source.
+   *  Use `myObject.gravity["otherObjectName"] = false` to exclude any other object by name.
+   */
   gravity?: false | { strength: number; radius: number };
+  /** Auto-update properties - set these and they update every frame automatically! */
   autoRotateY?: number;
   autoBob?: { amplitude: number; speed: number; startY?: number; _time?: number };
   autoFollow?: { target: RuntimeObject | RuntimePlayer; speed: number; offset?: Vec3 };
   autoSpin?: { x?: number; y?: number; z?: number };
   autoMove?: { direction: Vec3; speed: number };
+  /** Parent in the hierarchy (Roblox-style). null = top-level in container. */
   parentId: string | null;
+  /** Live array of direct children (computed from the HierarchyIndex). */
   readonly children: RuntimeObject[];
+  /** Walk children to find one by name (returns first match). */
   findFirstChild: (name: string) => RuntimeObject | null;
+  /** Move this object under a new parent (or null to detach). */
   setParent: (parent: RuntimeObject | null) => void;
   on: (event: ObjectEventName, fn: (...args: any[]) => void) => () => void;
   off: (event: ObjectEventName, fn: (...args: any[]) => void) => void;
   GetPropertyChangedSignal: (property: string) => EventsAPI;
+  // Internal gravity exclusion storage
   _gravityExclusions: Set<string>;
 };
 
@@ -116,6 +139,7 @@ export type RuntimePlayer = {
   spawnPoint: Vec3;
   up: Vec3;
   inventory: PlayerInventory;
+  /** Auto-update property - automatically rotates the player to face movement direction */
   autoFaceMovement?: boolean;
   takeDamage: (n: number) => void;
   heal: (n: number) => void;
@@ -159,6 +183,7 @@ export type GuiElement = {
   onClick?: (game: GameAPI) => void;
 };
 
+/** Engine-level events - scripts can subscribe to any phase! */
 export type EngineEvents = {
   input: [dt: number, time: number];
   animation: [dt: number, time: number];
@@ -176,6 +201,7 @@ export type EngineEvents = {
   playerDied: [player: RuntimePlayer];
 };
 
+/** Event channel - a simplified version for specific event types */
 export type EventChannel<T extends any[]> = {
   on: (fn: (...args: T) => void) => () => void;
   off: (fn: (...args: T) => void) => void;
@@ -210,6 +236,7 @@ export class EventBus<T extends Record<string, any[]>> {
   clear() { this.subs.clear(); }
 }
 
+// Internal only - not exposed to scripts
 type EventsAPI = {
   on: <K extends keyof EngineEvents>(event: K, fn: (...args: EngineEvents[K]) => void) => () => void;
   off: <K extends keyof EngineEvents>(event: K, fn: (...args: EngineEvents[K]) => void) => void;
@@ -232,6 +259,7 @@ export type WorldAPI = {
   onPlayerDied: (fn: (player: RuntimePlayer) => void) => () => void;
 };
 
+/** RunService - clean API with simple .on(fn) for each phase */
 export type RunServiceAPI = {
   input: EventChannel<[dt: number, time: number]>;
   animation: EventChannel<[dt: number, time: number]>;
@@ -310,14 +338,67 @@ export type CompiledScript = {
 
 export function compileScript(code: string, name: string): CompiledScript {
   try {
-    const run = (api: GameAPI) => {
-      const fn = new Function("api", code);
-      fn(api);
-    };
-    return { name, run };
+    const safeCode = code
+      .replace(/\\/g, "\\\\")
+      .replace(/`/g, "\\`")
+      .replace(/\$\{/g, "\\${");
+
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+
+    const factory = new AsyncFunction(
+      "game",
+      `"use strict";
+       const objects = game.objects;
+       const workspace = game.workspace;
+       const lighting = game.lighting;
+       const replicatedStorage = game.replicatedStorage;
+       const serverScriptService = game.serverScriptService;
+       const starterPlayer = game.starterPlayer;
+       const players = game.players;
+       const player = game.player;
+       const input = game.input;
+       const physics = game.physics;
+       const state = game.state;
+       const runService = game.runService;
+       const keyboard = game.keyboard;
+       const mouse = game.mouse;
+       const world = game.world;
+       const gui = game.gui;
+       const log = game.log;
+       const inventory = game.player ? game.player.inventory : undefined;
+       const find = game.find;
+       const spawn = game.spawn;
+       const create = game.create;
+       const destroy = game.destroy;
+       const onKey = game.onKey;
+       const onUpdate = game.onUpdate;
+       const every = game.every;
+       const after = game.after;
+       const wait = game.wait;
+       const now = game.now;
+       const random = game.random;
+       const randInt = game.randInt;
+       const pick = game.pick;
+       const dist = game.dist;
+       const lerp = game.lerp;
+       const clamp = game.clamp;
+       const raycast = game.raycast;
+       const network = game.network;
+       const console = {
+         log:   (...a) => game.log(...a),
+         info:  (...a) => game.log("[info]", ...a),
+         warn:  (...a) => game.log("[warn]", ...a),
+         error: (...a) => game.log("[error]", ...a),
+       };
+       ${safeCode}`,
+    );
+
+    return { name, run: factory as (api: GameAPI) => void };
   } catch (e: any) {
     const msg = e?.message ?? String(e);
-    const stack = typeof e?.stack === "string" ? `\n${e.stack.split("\n").slice(0, 3).join("\n")}` : "";
+    const stack = typeof e?.stack === "string"
+      ? `\n${e.stack.split("\n").slice(0, 3).join("\n")}`
+      : "";
     return { name, error: `${msg}${stack}` };
   }
 }
@@ -326,7 +407,9 @@ function newId() { return `rt_${Math.random().toString(36).slice(2, 10)}`; }
 
 function formatErr(e: any): string {
   const msg = e?.message ?? String(e);
-  const stack = typeof e?.stack === "string" ? e.stack.split("\\n").slice(1, 4).map((l: string) => "  " + l.trim()).join("\\n") : "";
+  const stack = typeof e?.stack === "string"
+    ? e.stack.split("\\n").slice(1, 4).map((l: string) => "  " + l.trim()).join("\\n")
+    : "";
   return stack ? `${msg}\\n${stack}` : msg;
 }
 
@@ -342,6 +425,11 @@ function readProperties(o: GameObject): ObjectProperties {
     } else if (p.gravity === true) {
       gravityVal = { strength: 9.81, radius: 30 };
     }
+  } else if ((p as any).gravityEnabled === true) {
+    gravityVal = {
+      strength: (p as any).gravityStrength ?? 9.81,
+      radius: (p as any).gravityRadius ?? 30,
+    };
   }
   return {
     anchored: p.anchored ?? true,
@@ -430,7 +518,6 @@ function createStubInventory(): PlayerInventory {
 
 export class GameRuntime {
   private _all = new Map<string, RuntimeObject>();
-  private _autoPropObjects = new Set<RuntimeObject>();
   objectList: RuntimeObject[] = [];
   objects: Record<string, RuntimeObject> = {};
   workspace: Record<string, RuntimeObject> = {};
@@ -506,7 +593,6 @@ export class GameRuntime {
       };
       const ro = this.mountObjectEvents(rawRo);
       this._all.set(ro.id, ro);
-      if (this.hasAutoProperties(ro)) this._autoPropObjects.add(ro);
     }
     this.rebuildIndexes();
 
@@ -564,8 +650,8 @@ export class GameRuntime {
     const items: InventoryItem[] = [];
     let equippedId: string | null = null;
     const inv = this.player.inventory as any;
-    Object.defineProperty(inv, "items", { value: items, writable: false });
-    Object.defineProperty(inv, "equipped", { get: () => items.find(i => i.id === equippedId) ?? null });
+    Object.defineProperty(inv, "items", { value: items, writable: false, configurable: true });
+    Object.defineProperty(inv, "equipped", { get: () => items.find(i => i.id === equippedId) ?? null, configurable: true });
 
     inv.add = (name: string, opts?: { count?: number; template?: string; data?: Record<string, any> }): InventoryItem | null => {
       const count = Math.max(1, Math.floor(opts?.count ?? 1));
@@ -634,17 +720,13 @@ export class GameRuntime {
     p.takeDamage = (n: number) => { p.health = Math.max(0, p.health - n); if (p.health <= 0) p.respawn(); };
     p.heal = (n: number) => { p.health = Math.min(p.maxHealth, p.health + n); };
     p.teleport = (x: number, y: number, z: number) => { p.position.x = x; p.position.y = y; p.position.z = z; p.velocity.x = 0; p.velocity.y = 0; p.velocity.z = 0; };
-    p.respawn = () => {
+    p.respawn = () => { 
       const sp = p.spawnPoint;
       p.position.x = sp.x; p.position.y = sp.y; p.position.z = sp.z;
       p.velocity.x = 0; p.velocity.y = 0; p.velocity.z = 0;
       p.health = p.maxHealth;
       this.pushLog(`${p.username} respawned.`);
     };
-  }
-
-  private hasAutoProperties(o: RuntimeObject): boolean {
-    return !!(o.autoRotateY || o.autoBob || o.autoFollow || o.autoSpin || o.autoMove);
   }
 
   private mountObjectEvents(raw: RuntimeObject): RuntimeObject {
@@ -661,10 +743,6 @@ export class GameRuntime {
           if (propBus) propBus.emit("changed", [propName, value, oldValue]);
           const generalBus = this._objectEvents.get(id);
           if (generalBus) generalBus.emit("changed", [propName, value, oldValue]);
-          if (["autoRotateY", "autoBob", "autoFollow", "autoSpin", "autoMove"].includes(propName)) {
-            if (value !== undefined) this._autoPropObjects.add(proxy);
-            else this._autoPropObjects.delete(proxy);
-          }
         }
         return true;
       }
@@ -702,6 +780,7 @@ export class GameRuntime {
     };
     hi.add(proxy);
 
+    // Initialize gravity and exclusions
     if (raw.gravity && typeof raw.gravity === "object") {
       proxy.gravity = { strength: raw.gravity.strength, radius: raw.gravity.radius };
     } else {
@@ -757,6 +836,7 @@ export class GameRuntime {
         }
       }
     });
+
     return proxy;
   }
 
@@ -800,7 +880,6 @@ export class GameRuntime {
     }
     this.rebuildIndexes();
     this._events.emit("objectAdded", [ro]);
-    if (this.hasAutoProperties(ro)) this._autoPropObjects.add(ro);
     return ro;
   }
 
@@ -836,7 +915,6 @@ export class GameRuntime {
     this._all.set(ro.id, ro);
     this.rebuildIndexes();
     this._events.emit("objectAdded", [ro]);
-    if (this.hasAutoProperties(ro)) this._autoPropObjects.add(ro);
     return ro;
   }
 
@@ -848,7 +926,6 @@ export class GameRuntime {
       if (!child) continue;
       this._all.delete(cid);
       this._playerContacts.delete(cid);
-      this._autoPropObjects.delete(child);
       this.emitObjectEvent(cid, "destroyed", []);
       this._objectEvents.delete(cid);
       this.hierarchy.remove(child);
@@ -856,7 +933,6 @@ export class GameRuntime {
     }
     this._all.delete(id);
     this._playerContacts.delete(id);
-    this._autoPropObjects.delete(ro);
     this.emitObjectEvent(id, "destroyed", []);
     this._objectEvents.delete(id);
     this.hierarchy.remove(ro);
@@ -960,42 +1036,42 @@ export class GameRuntime {
     const lerpFn = (a: number, b: number, t: number) => a + (b - a) * t;
     const clampFn = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
-    this._api = {
-      objects: this.objects,
-      workspace: this.workspace,
-      lighting: this.lighting,
-      replicatedStorage: this.replicatedStorage,
-      serverScriptService: this.serverScriptService,
-      starterPlayer: this.starterPlayer,
-      players: this.players,
-      player: this.player,
-      input: this.input,
-      physics: this.physics,
-      state: this.buildState(),
-      keyboard: keyboardApi,
-      mouse: mouseApi,
-      world: worldApi,
-      runService: this.runService,
-      time: this.time,
-      dt,
-      now,
-      log,
-      find,
-      spawn,
-      create,
-      destroy,
-      gui: { text: guiText, button: guiButton, clear: guiClear },
-      onKey,
-      onUpdate: onUpdateFn,
-      every,
-      after,
-      wait,
-      tween: tweenFn,
-      random,
-      randInt,
-      pick,
-      dist,
-      lerp: lerpFn,
+    this._api = { 
+      objects: this.objects, 
+      workspace: this.workspace, 
+      lighting: this.lighting, 
+      replicatedStorage: this.replicatedStorage, 
+      serverScriptService: this.serverScriptService, 
+      starterPlayer: this.starterPlayer, 
+      players: this.players, 
+      player: this.player, 
+      input: this.input, 
+      physics: this.physics, 
+      state: this.buildState(), 
+      keyboard: keyboardApi, 
+      mouse: mouseApi, 
+      world: worldApi, 
+      runService: this.runService, 
+      time: this.time, 
+      dt, 
+      now, 
+      log, 
+      find, 
+      spawn, 
+      create, 
+      destroy, 
+      gui: { text: guiText, button: guiButton, clear: guiClear }, 
+      onKey, 
+      onUpdate: onUpdateFn, 
+      every, 
+      after, 
+      wait, 
+      tween: tweenFn, 
+      random, 
+      randInt, 
+      pick, 
+      dist, 
+      lerp: lerpFn, 
       clamp: clampFn,
       raycast: raycastFn,
       network: networkApi,
@@ -1013,7 +1089,7 @@ export class GameRuntime {
   stop() { this._events.emit("stop", [], () => {}); this._events.clear(); this._objectEvents.clear(); this._keyDownHandlers.clear(); this._keyUpHandlers.clear(); this._mouseClickHandlers.clear(); this._timers.length = 0; this._tweens.clear(); this.network.clear(); this.hierarchy.clear(); }
 
   private updateAutoProperties(dt: number) {
-    for (const o of this._autoPropObjects) {
+    for (const o of this.objectList) {
       if (o.autoRotateY !== undefined) o.rotation.y += o.autoRotateY * dt;
       if (o.autoSpin) {
         if (o.autoSpin.x) o.rotation.x += o.autoSpin.x * dt;
@@ -1090,6 +1166,7 @@ export class GameRuntime {
     this.time += dt;
     const p = this.player;
 
+    // ========== INPUT PHASE ==========
     for (const k in this.input.keys) {
       const isDown = !!this.input.keys[k];
       const wasDown = !!this._prevKeys[k];
@@ -1105,9 +1182,12 @@ export class GameRuntime {
     }
     this._events.emit("input", [dt, this.time], (e, fn) => this.pushLog(`runService.input error: ${formatErr(e)}`));
 
+    // ========== ANIMATION PHASE ==========
     this._tweens.step(dt);
+    this.updateAutoProperties(dt);
     this._events.emit("animation", [dt, this.time], (e, fn) => this.pushLog(`runService.animation error: ${formatErr(e)}`));
 
+    // ========== REPLICATION PHASE ==========
     this.network.step(dt, this.player, this.objectList, {
       t: this.time,
       moveX: this.input.moveX,
@@ -1117,19 +1197,16 @@ export class GameRuntime {
     });
     this._events.emit("replication", [dt, this.time], (e, fn) => this.pushLog(`runService.replication error: ${formatErr(e)}`));
 
-    this.updateAutoProperties(dt);
-
+    // ========== PHYSICS PHASE ==========
     const gravityVec = this.computeGravityForTarget(p.position, null, null, true);
     const gMag = Math.hypot(gravityVec.x, gravityVec.y, gravityVec.z);
-    if (gMag > 0.001) {
-      const desiredUp = { x: -gravityVec.x / gMag, y: -gravityVec.y / gMag, z: -gravityVec.z / gMag };
-      const slerpT = Math.min(1, dt * 6);
-      p.up.x = p.up.x + (desiredUp.x - p.up.x) * slerpT;
-      p.up.y = p.up.y + (desiredUp.y - p.up.y) * slerpT;
-      p.up.z = p.up.z + (desiredUp.z - p.up.z) * slerpT;
-      const upLen = Math.hypot(p.up.x, p.up.y, p.up.z) || 1;
-      p.up.x /= upLen; p.up.y /= upLen; p.up.z /= upLen;
-    }
+    const desiredUp = gMag > 0.001 ? { x: -gravityVec.x / gMag, y: -gravityVec.y / gMag, z: -gravityVec.z / gMag } : { x: 0, y: 1, z: 0 };
+    const slerpT = Math.min(1, dt * 6);
+    p.up.x = p.up.x + (desiredUp.x - p.up.x) * slerpT;
+    p.up.y = p.up.y + (desiredUp.y - p.up.y) * slerpT;
+    p.up.z = p.up.z + (desiredUp.z - p.up.z) * slerpT;
+    const upLen = Math.hypot(p.up.x, p.up.y, p.up.z) || 1;
+    p.up.x /= upLen; p.up.y /= upLen; p.up.z /= upLen;
 
     const cf = this.cameraForward;
     const cfDot = cf.x * p.up.x + cf.y * p.up.y + cf.z * p.up.z;
@@ -1204,7 +1281,10 @@ export class GameRuntime {
     resolveObjectCollisions(this.objectList);
     this._events.emit("physics", [dt, this.time], (e, fn) => this.pushLog(`runService.physics error: ${formatErr(e)}`));
 
+    // ========== RENDER PHASE ==========
     this._events.emit("render", [dt, this.time], (e, fn) => this.pushLog(`runService.render error: ${formatErr(e)}`));
+
+    // ========== UPDATE PHASE ==========
     this._events.emit("update", [dt, this.time], (e, fn) => this.pushLog(`runService.update error: ${formatErr(e)}`));
 
     for (let i = this._timers.length - 1; i >= 0; i--) {
@@ -1306,8 +1386,11 @@ export class GameRuntime {
   }
 }
 
-export const DEFAULT_SCRIPT = `// No global gravity. Objects only move if pulled by a gravity source.
-// Create a planet with gravity:
+export const DEFAULT_SCRIPT = `// Welcome! Clean, consistent API - just .on(fn) for everything!
+// Gravity: only objects with gravity = { strength, radius } pull others.
+// No global gravity, no fallback – objects float unless a source acts on them.
+
+// ========== CREATE A GRAVITY SOURCE ==========
 const planet = create({
   primitiveType: "sphere",
   position: { x: 10, y: 5, z: 0 },
@@ -1322,60 +1405,90 @@ planet.gravity.player = false;
 // Exclude another object by name:
 planet.gravity.myRocket = false;
 
-// Re-enable later:
+// Re-enable gravity for the player:
 planet.gravity.player = true;
-delete planet.gravity.myRocket;  // remove exclusion
 
-// Auto-properties still work:
-const coin = create({ primitiveType: "sphere", position: { x: 2, y: 2, z: 0 }, color: "#ffd700" });
-coin.autoRotateY = 2;
+// Remove an exclusion:
+delete planet.gravity.myRocket;
+
+// ========== AUTO-UPDATE PROPERTIES ==========
+const coin = create({
+  primitiveType: "sphere",
+  position: { x: 2, y: 2, z: 0 },
+  color: "#ffd700"
+});
+coin.autoRotateY = 2;  // spins automatically
 coin.autoBob = { amplitude: 0.3, speed: 2 };
 
-const enemy = create({ primitiveType: "cube", position: { x: 5, y: 1, z: 5 }, color: "#ff4444" });
+const enemy = create({
+  primitiveType: "cube",
+  position: { x: 5, y: 1, z: 5 },
+  color: "#ff4444"
+});
 enemy.autoFollow = { target: player, speed: 2 };
 enemy.autoSpin = { y: 1.5 };
 
 player.autoFaceMovement = true;
 
-runService.update.on(() => {
-  log("Gravity works only from sources you define.");
+// ========== RUNSERVICE PHASES ==========
+runService.input.on((dt) => { /* input processing */ });
+runService.animation.on((dt) => { /* animations */ });
+runService.replication.on((dt) => { /* networking */ });
+runService.physics.on((dt) => { /* custom physics */ });
+runService.render.on((dt) => { /* camera / smoothing */ });
+runService.update.on((dt) => {
+  // Game logic here
+  log("Game running at", (1/dt).toFixed(0), "fps");
 });
+
+// ========== OTHER FEATURES ==========
+// Hierarchy, collisions, raycast, tween, state, inventory, GUI, networking...
+// See full documentation.
 `;
 
 export const SCRIPTING_DOCS = `# Scripting Guide – Gravity Sources Only
 
-## 🌍 No Global Gravity – Only Explicit Sources
+## 🌍 How Gravity Works
 
-Objects float unless a gravity source pulls them. A source is any object with:
+**No global gravity.** Objects float in place unless a gravity source pulls them.
+
+A gravity source is any object with \`gravity = { strength, radius }\`.
 
 \`\`\`js
+const planet = create({ primitiveType: "sphere" });
 planet.gravity = { strength: 12, radius: 50 };
 \`\`\`
 
 - **strength** – acceleration at the surface (m/s²)
-- **radius** – max distance (meters) where gravity affects others
+- **radius** – max distance (meters) where gravity affects other objects
 
-## 🚫 Exclusions
+## 🚫 Excluding Targets
 
-Prevent specific objects or the player from being affected:
+Prevent a specific object (or the player) from being affected by a gravity source:
 
 \`\`\`js
 // Exclude the player
 planet.gravity.player = false;
 
-// Exclude any object by name
+// Exclude any object by its name
 planet.gravity.myRocket = false;
 
-// Re-enable
+// Re‑enable gravity for that target
 planet.gravity.player = true;
 
-// Remove exclusion
+// Remove an exclusion completely
 delete planet.gravity.myRocket;
 \`\`\`
 
+Exclusions are stored per source. A target will not feel any pull from that source while excluded.
+
+## 💫 Multiple Sources
+
+If multiple gravity sources affect the same object, only the strongest one (highest acceleration) is applied. Exclusions override.
+
 ## ⚡ Auto-Update Properties
 
-Set once, update every frame automatically:
+Set once, they update every frame automatically:
 
 - \`autoRotateY\` (radians/sec)
 - \`autoBob = { amplitude, speed }\`
@@ -1397,13 +1510,14 @@ runService.update.on((dt) => {});
 
 ## 🧩 Other Features
 
-- **Hierarchy** – \`obj.setParent(parent)\`, \`obj.children\`
+- **Hierarchy** – \`obj.setParent(parent)\`, \`obj.children\`, \`findFirstChild\`
 - **Collisions** – \`canCollide\`, \`touched\` / \`untouched\` events
 - **Raycasting** – \`raycast(origin, direction, maxDistance, params?)\`
 - **Tweening** – \`tween(target, to, duration, easing?)\`
-- **State** – \`state.set()\`, \`state.on()\`
-- **Inventory** – \`player.inventory.add()\`, \`.equip()\`, \`.drop()\`
+- **State** – \`state.set("key", "value")\`, \`state.on("key", fn)\`
+- **Inventory** – \`player.inventory.add(...)\`, \`.equip()\`, \`.drop()\`
 - **GUI** – \`gui.text()\`, \`gui.button()\`
 - **Networking (stub)** – \`network.server.broadcast\`, \`network.client.send\`
 
-Now build your universe with precise gravity control.`;
+Everything else is automatic. Build your universe with precise gravity control.
+`;
