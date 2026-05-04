@@ -232,7 +232,12 @@ function ChaseCameraRig({ runtime }: { runtime: GameRuntime }) {
     camera.up.lerp(up, 0.15).normalize();
 
     if (controlsRef.current) {
-      controlsRef.current.target.lerp(pos, 0.25);
+      // Snap target straight to the player position. Lerping the orbit target
+      // toward a player whose position is itself derived (one frame later)
+      // from a camera-relative input vector creates a feedback loop that
+      // looks like jitter, especially on touch devices where the player turns
+      // rapidly. Snapping kills the loop while still feeling glued.
+      controlsRef.current.target.set(pos.x, pos.y, pos.z);
       controlsRef.current.update();
     }
 
@@ -249,9 +254,11 @@ function ChaseCameraRig({ runtime }: { runtime: GameRuntime }) {
       ref={controlsRef}
       makeDefault
       enableDamping
+      dampingFactor={0.18}
       enablePan={false}
       minDistance={3}
       maxDistance={10}
+      maxPolarAngle={Math.PI * 0.49}
     />
   );
 }
