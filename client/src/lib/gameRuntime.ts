@@ -1219,6 +1219,20 @@ export class GameRuntime {
     p.velocity.x = wantX * speed + p.up.x * upVelDot;
     p.velocity.z = wantZ * speed + p.up.z * upVelDot;
 
+    // ===== 3rd-person facing =====
+    // Face the actual world-space movement direction so the character looks
+    // forward when walking forward (regardless of how the camera is oriented).
+    if (p.autoFaceMovement) {
+      const moveMag = Math.hypot(wantX, wantZ);
+      if (moveMag > 0.05) {
+        const targetYaw = Math.atan2(wantX, wantZ);
+        let diff = targetYaw - p.rotation.y;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        p.rotation.y += diff * Math.min(1, dt * 12);
+      }
+    }
+
     if (this.input.jump && p.onGround) {
       const jp = p.jumpPower || 8;
       p.velocity.x += p.up.x * jp;
