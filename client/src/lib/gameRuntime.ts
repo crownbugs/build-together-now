@@ -44,6 +44,167 @@ export const DEFAULT_PROPERTIES: ObjectProperties = {
 
 export type ObjectEventName = "touched" | "untouched" | "clicked" | "destroyed" | "changed";
 
+// ========== NEW: Emitter (custom events) ==========
+export class Emitter<T extends any[] = any[]> {
+  private listeners: Set<(...args: T) => void> = new Set();
+  private onceListeners: Set<(...args: T) => void> = new Set();
+
+  on(fn: (...args: T) => void): () => void {
+    this.listeners.add(fn);
+    return () => this.off(fn);
+  }
+
+  once(fn: (...args: T) => void): () => void {
+    this.onceListeners.add(fn);
+    return () => this.off(fn);
+  }
+
+  off(fn: (...args: T) => void): void {
+    this.listeners.delete(fn);
+    this.onceListeners.delete(fn);
+  }
+
+  emit(...args: T): void {
+    for (const fn of this.listeners) fn(...args);
+    for (const fn of this.onceListeners) {
+      fn(...args);
+      this.onceListeners.delete(fn);
+    }
+  }
+
+  wait(): Promise<T> {
+    return new Promise(resolve => {
+      const off = this.once((...args) => {
+        off();
+        resolve(args);
+      });
+    });
+  }
+
+  clear(): void {
+    this.listeners.clear();
+    this.onceListeners.clear();
+  }
+}
+
+// ========== NEW: Callable (cross‑script functions) ==========
+export class Callable<TArgs extends any[] = any[], TResult = any> {
+  private handler: ((...args: TArgs) => TResult) | null = null;
+
+  setHandler(fn: (...args: TArgs) => TResult): void {
+    this.handler = fn;
+  }
+
+  invoke(...args: TArgs): TResult {
+    if (!this.handler) throw new Error("Callable has no handler");
+    return this.handler(...args);
+  }
+}
+
+// ========== NEW: WeakTable (weak keys) ==========
+export class WeakTable<K extends object, V> {
+  private map = new WeakMap<K, V>();
+  set(key: K, value: V): this { this.map.set(key, value); return this; }
+  get(key: K): V | undefined { return this.map.get(key); }
+  has(key: K): boolean { return this.map.has(key); }
+  delete(key: K): boolean { return this.map.delete(key); }
+}
+
+// ========== NEW: Class system (metatable‑style OOP) ==========
+export class Class {
+  static extend<T extends typeof Class>(this: T, name: string, base?: any): any {
+    const ctor = function(this: any, props: any = {}) {
+      this.__name = name;
+      Object.assign(this, props);
+      if (this.construct) this.construct();
+    };
+    if (base) Object.setPrototypeOf(ctor.prototype, base.prototype);
+    ctor.prototype.__class = ctor;
+    ctor.prototype.__name = name;
+    ctor.prototype.destroy = function() { if (this.destruct) this.destruct(); };
+    return ctor;
+  }
+}
+
+// ========== NEW: TagManager ==========
+class TagManager {
+  private tags = new Map<string, Set<RuntimeObject>>();
+
+  addTag(obj: RuntimeObject, tag: string): void {
+    let set = this.tags.get(tag);
+    if (!set) { set = new Set(); this.tags.set(tag, set); }
+    set.add(obj);
+  }
+
+  removeTag(obj: RuntimeObject, tag: string): void {
+    this.tags.get(tag)?.delete(obj);
+  }
+
+  hasTag(obj: RuntimeObject, tag: string): boolean {
+    return this.tags.get(tag)?.has(obj) ?? false;
+  }
+
+  getTagged(tag: string): RuntimeObject[] {
+    return Array.from(this.tags.get(tag) ?? []);
+  }
+
+  getTags(obj: RuntimeObject): string[] {
+    const result: string[] = [];
+    for (const [tag, set] of this.tags) if (set.has(obj)) result.push(tag);
+    return result;
+  }
+
+  clear(): void { this.tags.clear(); }
+}
+
+// ========== NEW: TaskScheduler (coroutine‑friendly) ==========
+class TaskScheduler {
+  private timers: { fn: () => void; delay: number; repeat: boolean; nextTime: number }[] = [];
+
+  wait(seconds: number): Promise<void> {
+    return new Promise(resolve => {
+      this.timers.push({ fn: resolve, delay: seconds, repeat: false, nextTime: 0 });
+    });
+  }
+
+  delay(seconds: number, callback: () => void): () => void {
+    const timer = { fn: callback, delay: seconds, repeat: false, nextTime: 0 };
+    this.timers.push(timer);
+    return () => {
+      const idx = this.timers.indexOf(timer);
+      if (idx !== -1) this.timers.splice(idx, 1);
+    };
+  }
+
+  spawn(fn: (...args: any[]) => any, ...args: any[]): void {
+    const result = fn(...args);
+    if (result && typeof result.next === "function") {
+      const step = async () => {
+        const { done, value } = result.next();
+        if (!done) {
+          if (value instanceof Promise) await value;
+          setTimeout(step, 0);
+        }
+      };
+      step();
+    } else {
+      Promise.resolve(result).catch(e => console.error(e));
+    }
+  }
+
+  step(currentTime: number): void {
+    for (let i = this.timers.length - 1; i >= 0; i--) {
+      const t = this.timers[i];
+      if (currentTime >= t.nextTime) {
+        t.fn();
+        if (t.repeat) t.nextTime = currentTime + t.delay;
+        else this.timers.splice(i, 1);
+      }
+    }
+  }
+}
+
+// ========== RuntimeObject definition (extended) ==========
 export type RuntimeObject = {
   id: string;
   name: string;
@@ -78,8 +239,15 @@ export type RuntimeObject = {
   off: (event: ObjectEventName, fn: (...args: any[]) => void) => void;
   GetPropertyChangedSignal: (property: string) => EventsAPI;
   _gravityExclusions: Set<string>;
+  // NEW: Attributes
+  setAttribute: (key: string, value: any) => void;
+  getAttribute: (key: string) => any;
+  getAttributes: () => Record<string, any>;
+  // NEW: Connections tracking for auto cleanup
+  __cleanup: Set<() => void>;
 };
 
+// Rest of types (InventoryItem, PlayerInventory, RuntimePlayer, etc.) unchanged
 export type InventoryItem = {
   id: string;
   name: string;
@@ -301,6 +469,33 @@ export type GameAPI = {
   dist: (a: Vec3 | { position: Vec3 }, b: Vec3 | { position: Vec3 }) => number;
   lerp: (a: number, b: number, t: number) => number;
   clamp: (n: number, min: number, max: number) => number;
+  // NEW APIS
+  Emitter: typeof Emitter;
+  Callable: typeof Callable;
+  tags: {
+    add: (obj: RuntimeObject, tag: string) => void;
+    remove: (obj: RuntimeObject, tag: string) => void;
+    has: (obj: RuntimeObject, tag: string) => boolean;
+    get: (tag: string) => RuntimeObject[];
+    all: (obj: RuntimeObject) => string[];
+  };
+  require: (name: string) => any;
+  task: {
+    wait: (seconds: number) => Promise<void>;
+    delay: (seconds: number, callback: () => void) => () => void;
+    spawn: (fn: Function, ...args: any[]) => void;
+  };
+  debug: {
+    getChildren: (obj: RuntimeObject) => RuntimeObject[];
+    getDescendants: (obj: RuntimeObject) => RuntimeObject[];
+    getFullName: (obj: RuntimeObject) => string;
+    getPropertyNames: (obj: RuntimeObject) => string[];
+    getObjectsWithTag: (tag: string) => RuntimeObject[];
+    getEventConnections: (obj: RuntimeObject) => number;
+  };
+  weakRef: typeof weakRef;
+  WeakTable: typeof WeakTable;
+  Class: typeof Class;
 };
 
 export type CompiledScript = {
@@ -309,6 +504,12 @@ export type CompiledScript = {
   error?: string;
 };
 
+function weakRef<T extends object>(obj: T): { get: () => T | null } {
+  const ref = new WeakRef(obj);
+  return { get: () => ref.deref() ?? null };
+}
+
+// Helper functions (unchanged)
 export function compileScript(code: string, name: string): CompiledScript {
   try {
     const safeCode = code
@@ -357,6 +558,16 @@ export function compileScript(code: string, name: string): CompiledScript {
        const clamp = game.clamp;
        const raycast = game.raycast;
        const network = game.network;
+       // NEW: add custom APIs to script scope
+       const Emitter = game.Emitter;
+       const Callable = game.Callable;
+       const tags = game.tags;
+       const require = game.require;
+       const task = game.task;
+       const debug = game.debug;
+       const weakRef = game.weakRef;
+       const WeakTable = game.WeakTable;
+       const Class = game.Class;
        const console = {
          log:   (...a) => game.log(...a),
          info:  (...a) => game.log("[info]", ...a),
@@ -519,9 +730,6 @@ export class GameRuntime {
   physics: RuntimePhysics = { gravity: 9.81, airDrag: 0 };
   cameraYaw = 0;
   cameraForward: Vec3 = { x: 0, y: 0, z: -1 };
-  // Smoothed horizontal forward basis used for movement input. Decoupled from
-  // the raw per-frame camera vector so input doesn't jitter when the user is
-  // looking near-vertical (top-down) or when OrbitControls damping wobbles.
   private _moveForward: Vec3 = { x: 0, y: 0, z: -1 };
   time = 0;
   scripts: CompiledScript[] = [];
@@ -530,6 +738,12 @@ export class GameRuntime {
   gui = new Map<string, GuiElement>();
   guiVersion = 0;
   runService!: RunServiceAPI;
+
+  // NEW: internal state for added features
+  private tagManager = new TagManager();
+  private taskScheduler = new TaskScheduler();
+  private modules = new Map<string, any>(); // for require()
+  private moduleScripts = new Map<string, RuntimeObject>(); // store ModuleScript objects
 
   constructor(snap: GameObject[], scripts: Script[], username: string, avatarColor: string) {
     const keys: Record<string, boolean> = {};
@@ -567,11 +781,38 @@ export class GameRuntime {
         setParent: () => {},
         GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
         _gravityExclusions: new Set<string>(),
+        setAttribute: () => {},
+        getAttribute: () => undefined,
+        getAttributes: () => ({}),
+        __cleanup: new Set(),
       };
       const ro = this.mountObjectEvents(rawRo);
       this._all.set(ro.id, ro);
     }
     this.rebuildIndexes();
+
+    // Register ModuleScripts from snap
+    for (const o of snap) {
+      if (o.type === "ModuleScript" && o.container === "ReplicatedStorage") {
+        const modObj = this._all.get(o.id);
+        if (modObj) {
+          this.moduleScripts.set(o.name, modObj);
+          // execute module script to get exports
+          const script = scripts.find(s => s.name === o.name);
+          if (script && script.enabled !== false) {
+            try {
+              const compiled = compileScript(script.code, script.name);
+              if (compiled.run) {
+                const exports: any = {};
+                const modApi = { ...this.buildApi(0), exports };
+                compiled.run(modApi);
+                this.modules.set(o.name, exports);
+              }
+            } catch (e) { this.pushLog(`ModuleScript ${o.name} error: ${formatErr(e)}`); }
+          }
+        }
+      }
+    }
 
     const spawnObj = [...this._all.values()].find(o => o.name === "SpawnLocation" || o.type === "spawn");
     const spawnPoint: Vec3 = spawnObj
@@ -603,7 +844,9 @@ export class GameRuntime {
     this.mountPlayerInventory();
     this.mountPlayerMethods();
     this.initRunService();
-    this.scripts = scripts.filter(s => s.enabled !== false).map(s => compileScript(s.code, s.name));
+    // filter out ModuleScripts from regular scripts
+    const regularScripts = scripts.filter(s => s.enabled !== false && !this.moduleScripts.has(s.name));
+    this.scripts = regularScripts.map(s => compileScript(s.code, s.name));
   }
 
   private normalizeContainer(raw: string | undefined | null): ContainerName {
@@ -709,6 +952,8 @@ export class GameRuntime {
   private mountObjectEvents(raw: RuntimeObject): RuntimeObject {
     const id = raw.id;
     const propertyEvents = new Map<string, EventBus<Record<"changed", [property: string, newValue: any, oldValue: any]>>>();
+    const attributes = new Map<string, any>(); // for setAttribute/getAttribute
+    const cleanupSet = new Set<() => void>(); // track connections
 
     const proxy = new Proxy(raw, {
       set: (target, prop, value) => {
@@ -728,7 +973,12 @@ export class GameRuntime {
     proxy.on = (event, fn) => {
       let bus = this._objectEvents.get(id);
       if (!bus) { bus = new EventBus(); this._objectEvents.set(id, bus); }
-      return bus.on(event as any, fn as any);
+      const disconnect = bus.on(event as any, fn as any);
+      cleanupSet.add(disconnect);
+      return () => {
+        disconnect();
+        cleanupSet.delete(disconnect);
+      };
     };
     proxy.off = (event, fn) => {
       this._objectEvents.get(id)?.off(event as any, fn as any);
@@ -736,8 +986,31 @@ export class GameRuntime {
     proxy.GetPropertyChangedSignal = (property: string) => {
       let bus = propertyEvents.get(property);
       if (!bus) { bus = new EventBus(); propertyEvents.set(property, bus); }
-      return { on: (event: any, fn: any) => bus!.on(event, fn), off: (event: any, fn: any) => bus!.off(event, fn) };
+      const api = {
+        on: (event: any, fn: any) => {
+          const disconnect = bus!.on(event, fn);
+          cleanupSet.add(disconnect);
+          return () => {
+            disconnect();
+            cleanupSet.delete(disconnect);
+          };
+        },
+        off: (event: any, fn: any) => bus!.off(event, fn)
+      };
+      return api;
     };
+
+    proxy.setAttribute = (key: string, value: any) => {
+      const old = attributes.get(key);
+      if (old !== value) {
+        attributes.set(key, value);
+        // emit changed event for "Attribute"
+        const generalBus = this._objectEvents.get(id);
+        if (generalBus) generalBus.emit("changed", [`Attribute.${key}`, value, old]);
+      }
+    };
+    proxy.getAttribute = (key: string) => attributes.get(key);
+    proxy.getAttributes = () => Object.fromEntries(attributes);
 
     const hi = this.hierarchy;
     const all = this._all;
@@ -757,7 +1030,7 @@ export class GameRuntime {
     };
     hi.add(proxy);
 
-    // Internal storage for gravity to avoid recursion
+    // Gravity exclusions handling (unchanged)
     let gravityValue: false | { strength: number; radius: number } = raw.gravity === false ? false : (raw.gravity ? { strength: raw.gravity.strength, radius: raw.gravity.radius } : false);
     const exclusions = new Set<string>();
 
@@ -809,9 +1082,15 @@ export class GameRuntime {
       }
     });
 
-    // Store exclusions on the object for computeGravity
     Object.defineProperty(proxy, "_gravityExclusions", {
       get: () => exclusions,
+      configurable: true,
+    });
+
+    // Store cleanup set on object
+    Object.defineProperty(proxy, "__cleanup", {
+      value: cleanupSet,
+      writable: false,
       configurable: true,
     });
 
@@ -849,6 +1128,10 @@ export class GameRuntime {
       setParent: () => {},
       GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
       _gravityExclusions: new Set<string>(),
+      setAttribute: () => {},
+      getAttribute: () => undefined,
+      getAttributes: () => ({}),
+      __cleanup: new Set(),
     };
     const ro = this.mountObjectEvents(raw);
     this._all.set(ro.id, ro);
@@ -888,6 +1171,10 @@ export class GameRuntime {
       setParent: () => {},
       GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
       _gravityExclusions: new Set(),
+      setAttribute: () => {},
+      getAttribute: () => undefined,
+      getAttributes: () => ({}),
+      __cleanup: new Set(),
     };
     const ro = this.mountObjectEvents(raw);
     this._all.set(ro.id, ro);
@@ -899,9 +1186,18 @@ export class GameRuntime {
   private removeObject(id: string) {
     const ro = this._all.get(id);
     if (!ro) return;
+    // Cleanup all connections
+    if (ro.__cleanup) {
+      for (const disconnect of ro.__cleanup) disconnect();
+      ro.__cleanup.clear();
+    }
     for (const cid of this.hierarchy.descendantIds(id)) {
       const child = this._all.get(cid);
       if (!child) continue;
+      if (child.__cleanup) {
+        for (const disconnect of child.__cleanup) disconnect();
+        child.__cleanup.clear();
+      }
       this._all.delete(cid);
       this._playerContacts.delete(cid);
       this.emitObjectEvent(cid, "destroyed", []);
@@ -1014,6 +1310,58 @@ export class GameRuntime {
     const lerpFn = (a: number, b: number, t: number) => a + (b - a) * t;
     const clampFn = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
+    // NEW APIs
+    const tagsApi = {
+      add: (obj: RuntimeObject, tag: string) => this.tagManager.addTag(obj, tag),
+      remove: (obj: RuntimeObject, tag: string) => this.tagManager.removeTag(obj, tag),
+      has: (obj: RuntimeObject, tag: string) => this.tagManager.hasTag(obj, tag),
+      get: (tag: string) => this.tagManager.getTagged(tag),
+      all: (obj: RuntimeObject) => this.tagManager.getTags(obj),
+    };
+    const requireModule = (name: string): any => {
+      const exports = this.modules.get(name);
+      if (exports !== undefined) return exports;
+      // try to find a ModuleScript object
+      const modObj = this.moduleScripts.get(name);
+      if (modObj) {
+        // find corresponding script source (should have been loaded at construction)
+        this.pushLog(`ModuleScript "${name}" not yet loaded`);
+        return null;
+      }
+      this.pushLog(`require: module "${name}" not found`);
+      return null;
+    };
+    const taskApi = {
+      wait: (seconds: number) => this.taskScheduler.wait(seconds),
+      delay: (seconds: number, callback: () => void) => this.taskScheduler.delay(seconds, callback),
+      spawn: (fn: Function, ...args: any[]) => this.taskScheduler.spawn(fn, ...args),
+    };
+    const debugApi = {
+      getChildren: (obj: RuntimeObject) => obj.children,
+      getDescendants: (obj: RuntimeObject): RuntimeObject[] => {
+        const result: RuntimeObject[] = [];
+        const stack = [...obj.children];
+        while (stack.length) {
+          const child = stack.pop()!;
+          result.push(child);
+          stack.push(...child.children);
+        }
+        return result;
+      },
+      getFullName: (obj: RuntimeObject): string => {
+        const parts: string[] = [];
+        let current: RuntimeObject | null = obj;
+        while (current) {
+          parts.unshift(current.name);
+          current = current.parentId ? this._all.get(current.parentId) ?? null : null;
+        }
+        return parts.join(".");
+      },
+      getPropertyNames: (obj: RuntimeObject): string[] => Object.keys(obj).filter(k => !k.startsWith("_") && typeof (obj as any)[k] !== "function"),
+      getObjectsWithTag: (tag: string) => this.tagManager.getTagged(tag),
+      getEventConnections: (obj: RuntimeObject): number => obj.__cleanup?.size ?? 0,
+    };
+
     this._api = { 
       objects: this.objects, 
       workspace: this.workspace, 
@@ -1053,6 +1401,16 @@ export class GameRuntime {
       clamp: clampFn,
       raycast: raycastFn,
       network: networkApi,
+      // NEW
+      Emitter,
+      Callable,
+      tags: tagsApi,
+      require: requireModule,
+      task: taskApi,
+      debug: debugApi,
+      weakRef,
+      WeakTable,
+      Class,
     };
     return this._api!;
   }
@@ -1064,7 +1422,7 @@ export class GameRuntime {
 
   start() { void this.runScripts(); this._events.emit("start", [], (e, fn) => this.pushLog(`internal start error: ${formatErr(e)}`)); this._events.emit("playerSpawned", [this.player], (e, fn) => this.pushLog(`internal playerSpawned error: ${formatErr(e)}`)); }
 
-  stop() { this._events.emit("stop", [], () => {}); this._events.clear(); this._objectEvents.clear(); this._keyDownHandlers.clear(); this._keyUpHandlers.clear(); this._mouseClickHandlers.clear(); this._timers.length = 0; this._tweens.clear(); this.network.clear(); this.hierarchy.clear(); }
+  stop() { this._events.emit("stop", [], () => {}); this._events.clear(); this._objectEvents.clear(); this._keyDownHandlers.clear(); this._keyUpHandlers.clear(); this._mouseClickHandlers.clear(); this._timers.length = 0; this._tweens.clear(); this.network.clear(); this.hierarchy.clear(); this.tagManager.clear(); }
 
   private updateAutoProperties(dt: number) {
     for (const o of this.objectList) {
@@ -1099,16 +1457,10 @@ export class GameRuntime {
         o.position.z += o.autoMove.direction.z * o.autoMove.speed * dt;
       }
     }
-
-    // autoFaceMovement is now applied AFTER physics in step() so we can use
-    // the actual world-space movement direction (wantX/wantZ), giving correct
-    // 3rd-person facing — character faces the way they're traveling, not raw
-    // input axes which are camera-relative and rotate with the camera.
   }
 
   private computeGravityForTarget(point: Vec3, targetId: string | null, targetName: string | null, isPlayer: boolean): Vec3 {
     let bestMag = 0, best: Vec3 | null = null;
-    // Check all gravity sources
     for (const source of this.objectList) {
       if (!source.gravity || typeof source.gravity !== "object") continue;
       const exclusions = source._gravityExclusions;
@@ -1124,9 +1476,7 @@ export class GameRuntime {
         best = { x: dirToCenter.x * accel, y: dirToCenter.y * accel, z: dirToCenter.z * accel };
       }
     }
-    // If any source dominated, return it; otherwise fall back to global gravity.
     if (bestMag > 0) return best!;
-    // Global gravity (constant downward)
     return { x: 0, y: -this.physics.gravity, z: 0 };
   }
 
@@ -1177,17 +1527,6 @@ export class GameRuntime {
     const upLen = Math.hypot(p.up.x, p.up.y, p.up.z) || 1;
     p.up.x /= upLen; p.up.y /= upLen; p.up.z /= upLen;
 
-    // Project the (possibly tilted) camera forward onto the player's tangent
-    // plane to get a horizontal "where the camera is looking" vector. When the
-    // camera looks nearly straight down/up the projection collapses and tiny
-    // numerical noise would flip its sign every frame — that was the source of
-    // the on-screen jitter, especially on touch devices where OrbitControls
-    // damping keeps perturbing the vector. We:
-    //   1. Compute the raw projected forward.
-    //   2. If it's too short to be reliable, REUSE the previous smoothed
-    //      forward instead of falling back to a different basis (no flips).
-    //   3. Low-pass filter into _moveForward so frame-to-frame jitter is
-    //      averaged out.
     const cf = this.cameraForward;
     const cfDot = cf.x * p.up.x + cf.y * p.up.y + cf.z * p.up.z;
     let fx = cf.x - p.up.x * cfDot;
@@ -1195,12 +1534,10 @@ export class GameRuntime {
     let fz = cf.z - p.up.z * cfDot;
     let fLen = Math.hypot(fx, fy, fz);
     if (fLen < 0.15) {
-      // Camera is near-parallel with up — keep last good forward.
       fx = this._moveForward.x; fy = this._moveForward.y; fz = this._moveForward.z;
       fLen = Math.hypot(fx, fy, fz) || 1;
     }
     fx /= fLen; fy /= fLen; fz /= fLen;
-    // Low-pass filter: ~120ms time constant. Smooth, but still responsive.
     const fwdBlend = Math.min(1, dt * 8);
     this._moveForward.x += (fx - this._moveForward.x) * fwdBlend;
     this._moveForward.y += (fy - this._moveForward.y) * fwdBlend;
@@ -1219,9 +1556,6 @@ export class GameRuntime {
     p.velocity.x = wantX * speed + p.up.x * upVelDot;
     p.velocity.z = wantZ * speed + p.up.z * upVelDot;
 
-    // ===== 3rd-person facing =====
-    // Face the actual world-space movement direction so the character looks
-    // forward when walking forward (regardless of how the camera is oriented).
     if (p.autoFaceMovement) {
       const moveMag = Math.hypot(wantX, wantZ);
       if (moveMag > 0.05) {
@@ -1294,6 +1628,9 @@ export class GameRuntime {
       if (t.once) this._timers.splice(i, 1);
       else t.nextAt = this.time + t.interval;
     }
+
+    // Run task scheduler timers (for task.wait/delay)
+    this.taskScheduler.step(this.time);
 
     if (p.health <= 0 && (this as any)._lastHealth > 0) { this._events.emit("playerDied", [p], () => {}); p.respawn(); this._events.emit("playerSpawned", [p], () => {}); }
     (this as any)._lastHealth = p.health;
@@ -1386,7 +1723,6 @@ export class GameRuntime {
   }
 }
 
-
 export const DEFAULT_SCRIPT = `// Starter script — see Docs panel for the full API.
 
 const planet = create({
@@ -1408,6 +1744,19 @@ coin.autoBob = { amplitude: 0.3, speed: 2 };
 player.autoFaceMovement = true;
 
 runService.update.on((dt) => {});
+
+// NEW: custom event example
+const onScore = new Emitter();
+onScore.on((points) => log("Score:", points));
+onScore.emit(100);
+
+// NEW: tags example
+tags.add(coin, "pickup");
+const pickups = tags.get("pickup");
+
+// NEW: module example (if you have a ModuleScript named "Utils")
+// const Utils = require("Utils");
+// Utils.doSomething();
 `;
 
 export const SCRIPTING_DOCS = `# Scripting Reference
@@ -1418,7 +1767,7 @@ Your scripts handle game logic.
 ## 1. Create / Destroy
 \`\`\`js
 const box = create({
-  primitiveType: "cube",       // cube | sphere | cylinder | plane
+  primitiveType: "cube",
   position: { x:0, y:1, z:0 },
   rotation: { x:0, y:0, z:0 },
   scale:    { x:1, y:1, z:1 },
@@ -1428,117 +1777,97 @@ const box = create({
   transparency: 0,
   parent: someObject,
 });
-destroy(box);                  // cascades to children
+destroy(box); // cascades to children, automatically disconnects all events
 \`\`\`
 
-## 2. Hierarchy
+## 2. Custom Events (Emitter)
 \`\`\`js
-const turret = create({ primitiveType: "cube" });
-const barrel = create({ primitiveType: "cylinder", parent: turret });
-barrel.setParent(turret);
-turret.findFirstChild("barrel");
-turret.children;               // live array
+const event = new Emitter();
+const off = event.on((msg) => log(msg));
+event.emit("hello");
+event.once((data) => log("once", data));
+const result = await event.wait(); // promise resolves on next emit
 \`\`\`
 
-## 3. Player
+## 3. Cross‑script Calls (Callable)
 \`\`\`js
-player.position / .rotation / .velocity / .up
-player.color, player.size, player.speed, player.jumpPower
-player.health, player.maxHealth
-player.takeDamage(10); player.heal(5); player.respawn();
-player.teleport(x, y, z);
-player.autoFaceMovement = true;     // 3rd-person facing
-player.inventory.add(item); .equip(name); .drop(name);
+// In one script:
+const adder = new Callable();
+adder.setHandler((a,b) => a+b);
+// In another script (via module or global):
+const result = adder.invoke(2,3); // 5
 \`\`\`
 
-## 4. Input
+## 4. Attributes on Objects
 \`\`\`js
-keyboard.onPress("e", () => log("E"));
-keyboard.onRelease("e", () => {});
-input.held("w");
-input.moveX; input.moveZ;      // -1..1 (WASD + joystick)
-mouse.onClick((obj) => log(obj?.name));
-obj.on("clicked", () => {});
+part.setAttribute("team", "red");
+part.getAttribute("team"); // "red"
+part.getAttributes(); // { team: "red" }
 \`\`\`
 
-## 5. Auto Properties (engine animates)
+## 5. Tagging (Collection Service)
 \`\`\`js
-obj.autoRotateY = 2;
-obj.autoBob     = { amplitude: 0.3, speed: 2 };
-obj.autoSpin    = { x:0, y:1, z:0 };
-obj.autoFollow  = { target: player, speed: 3 };
-obj.autoMove    = { direction:{ x:1, y:0, z:0 }, speed: 2 };
+tags.add(part, "enemy");
+tags.has(part, "enemy"); // true
+const enemies = tags.get("enemy");
+tags.remove(part, "enemy");
+tags.all(part); // ["enemy", ...]
 \`\`\`
 
-## 6. Tweens
+## 6. Module System (require)
 \`\`\`js
-tween(obj.position, { x: 10 }, 1.5, "easeInOut");
-tween(obj, { transparency: 1 }, 0.5);
+// In a ModuleScript placed in ReplicatedStorage named "MathLib"
+export const add = (a,b) => a+b;
+
+// In any script:
+const MathLib = require("MathLib");
+MathLib.add(2,3); // 5
 \`\`\`
 
-## 7. Physics & Gravity
-- Global gravity (\`physics.gravity\`, default 9.81) pulls down.
-- \`gravity = { strength, radius }\` makes an object a gravity source.
-- Exclude target: \`planet.gravity.player = false\` or by object name.
-- \`anchored\` freezes; \`canCollide\` toggles collisions on ALL objects.
-
-## 8. Collisions
+## 7. Task Scheduler
 \`\`\`js
-boxA.on("touched",   (other) => log("hit", other.name));
-boxA.on("untouched", (other) => {});
+await task.wait(1.5); // yields current async function
+task.delay(2, () => log("2 seconds later"));
+task.spawn(function* () {
+  yield task.wait(1);
+  log("coroutine step");
+});
 \`\`\`
 
-## 9. Raycasting
+## 8. Debug / Introspection
 \`\`\`js
-const hit = raycast(player.position, { x:0, y:-1, z:0 }, 5,
-  { ignore: [player], onlyCanCollide: true });
-if (hit) log(hit.object.name, hit.distance, hit.position, hit.normal);
+debug.getChildren(workspace);
+debug.getDescendants(player);
+debug.getFullName(part); // "Workspace.Folder.Part"
+debug.getPropertyNames(part);
+debug.getObjectsWithTag("enemy");
+debug.getEventConnections(part); // number of active connections
 \`\`\`
 
-## 10. RunService Phases (fixed order)
+## 9. Weak References
 \`\`\`js
-runService.input.on(dt => {});
-runService.animation.on(dt => {});
-runService.replication.on(dt => {});
-runService.physics.on(dt => {});
-runService.render.on(dt => {});
-runService.update.on(dt => {});
+const ref = weakRef(part);
+if (ref.get()) log("still alive");
+const table = new WeakTable();
+table.set(part, "data");
 \`\`\`
 
-## 11. State
+## 10. Class System (OOP)
 \`\`\`js
-state.set("score", "0");
-state.on("score", (val, prev) => log(val));
-state.get("score");
+const MyPart = Class.extend("MyPart");
+MyPart.prototype.construct = function() { log("created"); };
+MyPart.prototype.destruct = function() { log("destroyed"); };
+const inst = new MyPart({ position: {x:1,y:2,z:3} });
+inst.destroy();
 \`\`\`
 
-## 12. GUI
-\`\`\`js
-const t = gui.text({ text:"Score: 0", anchor:"tl", x:12, y:12, size:16 });
-t.text = "Score: 99";
-gui.button({ text:"Jump", anchor:"br", x:24, y:24, onClick: () => player.respawn() });
-\`\`\`
-Anchors: tl tc tr cl cc cr bl bc br.
+## 11. Automatic Cleanup on destroy()
+All \`.on()\`, \`GetPropertyChangedSignal\`, \`Emitter\` connections are automatically disconnected when the object is destroyed.
 
-## 13. Networking (server-authoritative)
-\`\`\`js
-// Server (ServerScriptService)
-network.server.broadcast("worldUpdate", { t: Date.now() });
-network.server.onInput((playerId, msg) => {});
-
-// Client
-network.client.send("shoot", { dir:{ x:0, y:0, z:1 } });
-network.client.on("worldUpdate", (data) => {});
-\`\`\`
-
-## 14. Containers
-- **Workspace** — live world.
-- **Lighting** — ambient/light setup.
-- **ReplicatedStorage** — templates: \`spawn("Name", overrides?)\`.
-- **ServerScriptService** — server-only authoritative scripts.
-
-## 15. Logging
-\`\`\`js
-log("hello", value);           // visible in the in-game Console
-\`\`\`
+## 12. Existing APIs (unchanged)
+- Hierarchy, player, input, auto properties, tweens, physics, collisions, raycasting, runService phases, state, GUI, networking, logging... all work as before.
 `;
+
+// export all public types
+export type { Easing } from "./runtime/tween";
+export type { RaycastResult, RaycastParams } from "./runtime/raycast";
