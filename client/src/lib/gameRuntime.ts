@@ -1100,23 +1100,10 @@ export class GameRuntime {
       }
     }
 
-    if (this.player.autoFaceMovement) {
-      const inputMag = Math.hypot(this.input.moveX, this.input.moveZ);
-      if (inputMag > 0.01) {
-        const cf = this.cameraForward;
-        const up = this.player.up;
-        const cfDot = cf.x * up.x + cf.y * up.y + cf.z * up.z;
-        let fx = cf.x - up.x * cfDot;
-        let fz = cf.z - up.z * cfDot;
-        const len = Math.hypot(fx, fz);
-        if (len > 0.001) { fx /= len; fz /= len; }
-        const targetYaw = Math.atan2(this.input.moveX, this.input.moveZ);
-        let diff = targetYaw - this.player.rotation.y;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        this.player.rotation.y += diff * Math.min(1, dt * 12);
-      }
-    }
+    // autoFaceMovement is now applied AFTER physics in step() so we can use
+    // the actual world-space movement direction (wantX/wantZ), giving correct
+    // 3rd-person facing — character faces the way they're traveling, not raw
+    // input axes which are camera-relative and rotate with the camera.
   }
 
   private computeGravityForTarget(point: Vec3, targetId: string | null, targetName: string | null, isPlayer: boolean): Vec3 {
