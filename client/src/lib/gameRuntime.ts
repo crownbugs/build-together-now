@@ -1190,21 +1190,38 @@ export class GameRuntime {
     const upLen = Math.hypot(p.up.x, p.up.y, p.up.z) || 1;
     p.up.x /= upLen; p.up.y /= upLen; p.up.z /= upLen;
 
+    // Project the (possibly tilted) camera forward onto the player's tangent
+    // plane to get a horizontal "where the camera is looking" vector. When the
+    // camera looks nearly straight down/up the projection collapses and tiny
+    // numerical noise would flip its sign every frame — that was the source of
+    // the on-screen jitter, especially on touch devices where OrbitControls
+    // damping keeps perturbing the vector. We:
+    //   1. Compute the raw projected forward.
+    //   2. If it's too short to be reliable, REUSE the previous smoothed
+    //      forward instead of falling back to a different basis (no flips).
+    //   3. Low-pass filter into _moveForward so frame-to-frame jitter is
+    //      averaged out.
     const cf = this.cameraForward;
     const cfDot = cf.x * p.up.x + cf.y * p.up.y + cf.z * p.up.z;
     let fx = cf.x - p.up.x * cfDot;
     let fy = cf.y - p.up.y * cfDot;
     let fz = cf.z - p.up.z * cfDot;
     let fLen = Math.hypot(fx, fy, fz);
-    if (fLen < 0.0001) {
-      const fallback = Math.abs(p.up.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
-      const fbDot = fallback.x * p.up.x + fallback.y * p.up.y + fallback.z * p.up.z;
-      fx = fallback.x - p.up.x * fbDot;
-      fy = fallback.y - p.up.y * fbDot;
-      fz = fallback.z - p.up.z * fbDot;
+    if (fLen < 0.15) {
+      // Camera is near-parallel with up — keep last good forward.
+      fx = this._moveForward.x; fy = this._moveForward.y; fz = this._moveForward.z;
       fLen = Math.hypot(fx, fy, fz) || 1;
     }
     fx /= fLen; fy /= fLen; fz /= fLen;
+    // Low-pass filter: ~120ms time constant. Smooth, but still responsive.
+    const fwdBlend = Math.min(1, dt * 8);
+    this._moveForward.x += (fx - this._moveForward.x) * fwdBlend;
+    this._moveForward.y += (fy - this._moveForward.y) * fwdBlend;
+    this._moveForward.z += (fz - this._moveForward.z) * fwdBlend;
+    const mfLen = Math.hypot(this._moveForward.x, this._moveForward.y, this._moveForward.z) || 1;
+    fx = this._moveForward.x / mfLen;
+    fy = this._moveForward.y / mfLen;
+    fz = this._moveForward.z / mfLen;
     const rx = fy * p.up.z - fz * p.up.y;
     const rz = fx * p.up.y - fy * p.up.x;
 
