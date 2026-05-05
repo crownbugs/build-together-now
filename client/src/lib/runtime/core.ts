@@ -20,7 +20,7 @@ import {
   type GuiElement,
   type EngineEvents,
   type EventChannel,
-  type EventBus,
+  EventBus,
   type KeyboardAPI,
   type MouseAPI,
   type WorldAPI,
