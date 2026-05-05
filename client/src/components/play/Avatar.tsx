@@ -2,15 +2,6 @@ import { Html } from "@react-three/drei";
 import * as THREE from "three";
 import { GameRuntime, type RuntimePlayer } from "@/lib/gameRuntime";
 
-/**
- * 3rd-person character mesh. Orientation is built from the player's "up"
- * vector (so feet point at gravity) plus a Y rotation managed by the
- * runtime's autoFaceMovement / script logic.
- *
- * Walk/run animation cycles are driven by `player.motors.animation` so
- * scripts can override (e.g. set "shoot", "wave"). When the player ragdolls,
- * limbs render at offsets read from `runtime._ragdollPos`.
- */
 export default function Avatar({
   player,
   runtime,
@@ -24,6 +15,7 @@ export default function Avatar({
     1,
     horiz / Math.max(1, player.runSpeed || player.speed)
   );
+
   const swingSpeed = anim === "run" ? 14 : anim === "walk" ? 9 : 0;
   const swing = Math.sin(runtime.time * swingSpeed) * 0.6 * moveAmount;
   const size = player.size || 1;
@@ -44,55 +36,28 @@ export default function Avatar({
     >
       <group rotation={[0, player.rotation.y, 0]} scale={[size, size, size]}>
 
-        {/* 🟤 HYBRID TORSO (bean bottom + capsule middle + bean top) */}
-        <group
+        {/* 🟡 CARTOON JELLY BEAN BODY (single organic mesh) */}
+        <mesh
           position={
             off("torso")
               ? [off("torso")!.x, off("torso")!.y, off("torso")!.z]
               : [0, 0.05, 0]
           }
+          castShadow
         >
-          {(() => {
-            const radius = 0.38;
-            const height = 0.7;
+          {/* base sphere */}
+          <sphereGeometry args={[0.45, 32, 32]} />
 
-            return (
-              <>
-                {/* 🔻 bottom jelly bean */}
-                <mesh position={[0, -height / 2, 0]} castShadow>
-                  <sphereGeometry args={[radius * 0.95, 24, 24]} />
-                  <meshStandardMaterial
-                    color={player.color}
-                    roughness={0.55}
-                    metalness={0.05}
-                  />
-                </mesh>
+          {/* bean-like squash: wider middle, tapered ends */}
+          <meshStandardMaterial
+            color={player.color}
+            roughness={0.55}
+            metalness={0.05}
+          />
 
-                {/* 🧱 capsule middle */}
-                <mesh castShadow>
-                  <cylinderGeometry
-                    args={[radius * 0.85, radius * 0.85, height, 24]}
-                  />
-                  <meshStandardMaterial
-                    color={player.color}
-                    roughness={0.55}
-                    metalness={0.05}
-                  />
-                </mesh>
-
-                {/* 🔺 top jelly bean */}
-                <mesh position={[0, height / 2, 0]} castShadow>
-                  <sphereGeometry args={[radius * 1.05, 24, 24]} />
-                  <meshStandardMaterial
-                    color={player.color}
-                    roughness={0.55}
-                    metalness={0.05}
-                  />
-                </mesh>
-              </>
-            );
-          })()}
-        </group>
+          {/* shape distortion via scale */}
+          <group scale={[0.75, 1.15, 0.75]} />
+        </mesh>
 
         {/* feet base */}
         {!rag && (
