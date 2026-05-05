@@ -37,31 +37,35 @@ export default function Avatar({
     >
       <group rotation={[0, player.rotation.y, 0]} scale={[size, size, size]}>
 
-        {/* 🟡 CONNECTED CAPSULE–BEAN TORSO */}
-        <mesh
+        {/* 🟡 MAIN BODY (capsule base) */}
+        <group
           position={
             off("torso")
               ? [off("torso")!.x, off("torso")!.y, off("torso")!.z]
               : [0, 0.05, 0]
           }
-          castShadow
         >
-          <capsuleGeometry args={[0.34, 0.7, 16, 32]} />
+          <mesh castShadow>
+            <capsuleGeometry args={[0.34, 0.7, 16, 32]} />
+            <meshStandardMaterial
+              color={player.color}
+              roughness={0.55}
+              metalness={0.05}
+            />
+          </mesh>
 
-          <meshStandardMaterial
-            color={player.color}
-            roughness={0.55}
-            metalness={0.05}
-          />
+          {/* 🟣 HIP BLEND (THIS fixes diaper look) */}
+          <mesh position={[0, -0.28, 0]} castShadow>
+            <sphereGeometry args={[0.43, 24, 24]} />
+            <meshStandardMaterial
+              color={player.color}
+              roughness={0.55}
+              metalness={0.05}
+            />
+          </mesh>
+        </group>
 
-          {/* 👇 subtle “bean distortion” feel (not geometry split, just shaping) */}
-          <group
-            scale={[0.78, 1.12, 0.86]}
-            position={[0.02, 0.0, -0.01]}
-          />
-        </mesh>
-
-        {/* FEET BASE */}
+        {/* BELT */}
         {!rag && (
           <mesh position={[0, -0.18, 0]} castShadow>
             <cylinderGeometry args={[0.34, 0.34, 0.08, 24]} />
@@ -82,7 +86,6 @@ export default function Avatar({
             <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
             <meshStandardMaterial color={player.color} roughness={0.6} />
           </mesh>
-
           <mesh position={[0, -0.55, 0]} castShadow>
             <sphereGeometry args={[0.11, 16, 16]} />
             <meshStandardMaterial color="#7a3e19" roughness={0.7} />
@@ -102,14 +105,13 @@ export default function Avatar({
             <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
             <meshStandardMaterial color={player.color} roughness={0.6} />
           </mesh>
-
           <mesh position={[0, -0.55, 0]} castShadow>
             <sphereGeometry args={[0.11, 16, 16]} />
             <meshStandardMaterial color="#7a3e19" roughness={0.7} />
           </mesh>
         </group>
 
-        {/* RIGHT LEG */}
+        {/* RIGHT LEG (smooth hip connection) */}
         <group
           position={
             off("rightLeg")
@@ -118,13 +120,19 @@ export default function Avatar({
           }
           rotation={rag ? [0, 0, 0] : [-swing, 0, 0]}
         >
+          {/* hip connector (removes cut line) */}
+          <mesh position={[0, 0.15, 0]} castShadow>
+            <sphereGeometry args={[0.18, 18, 18]} />
+            <meshStandardMaterial color="#2a3142" roughness={0.7} />
+          </mesh>
+
           <mesh position={[0, -0.18, 0]} castShadow>
             <capsuleGeometry args={[0.13, 0.34, 6, 12]} />
             <meshStandardMaterial color="#2a3142" roughness={0.7} />
           </mesh>
         </group>
 
-        {/* LEFT LEG */}
+        {/* LEFT LEG (smooth hip connection) */}
         <group
           position={
             off("leftLeg")
@@ -133,6 +141,11 @@ export default function Avatar({
           }
           rotation={rag ? [0, 0, 0] : [swing, 0, 0]}
         >
+          <mesh position={[0, 0.15, 0]} castShadow>
+            <sphereGeometry args={[0.18, 18, 18]} />
+            <meshStandardMaterial color="#2a3142" roughness={0.7} />
+          </mesh>
+
           <mesh position={[0, -0.18, 0]} castShadow>
             <capsuleGeometry args={[0.13, 0.34, 6, 12]} />
             <meshStandardMaterial color="#2a3142" roughness={0.7} />
