@@ -11,9 +11,8 @@ import { GameRuntime, type RuntimePlayer } from "@/lib/gameRuntime";
  * scripts can override (e.g. set "shoot", "wave"). When the player ragdolls,
  * limbs render at offsets read from `runtime._ragdollPos`.
  * 
- * The torso is a cylinder with rounded top/bottom (pill shape) – a clean
- * cylinder plus hemispherical caps, distinct from a capsule. Head sits on the
- * upper cap, legs on the lower cap.
+ * The torso is a cylinder with rounded top/bottom edges (not full hemispheres).
+ * The caps are flattened spheres → “round but not too round”.
  */
 export default function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRuntime }) {
   const anim = player.motors.animation;
@@ -29,7 +28,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const rag = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const off = (k: string) => (rag && rag[k] ? rag[k] : null);
 
-  // Shoulder positions (torso-relative)
+  // Shoulder positions
   const rightShoulderPos = new THREE.Vector3(0.42, 0.38, 0);
   const leftShoulderPos = new THREE.Vector3(-0.42, 0.38, 0);
   
@@ -41,30 +40,32 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const ragRightArmPos = off("rightArm") ? new THREE.Vector3(off("rightArm")!.x, off("rightArm")!.y, off("rightArm")!.z) : null;
   const ragLeftArmPos = off("leftArm") ? new THREE.Vector3(off("leftArm")!.x, off("leftArm")!.y, off("leftArm")!.z) : null;
 
-  // Torso pill dimensions
+  // Torso dimensions
   const torsoRadius = 0.32;
-  const torsoHeight = 0.7;      // cylinder part height (not including caps)
-  const torsoTotalHeight = torsoHeight + torsoRadius * 2; // ≈ 1.34
-  const torsoYOffset = 0.05;    // center of the pill relative to character origin
+  const torsoHeight = 0.7;      // height of the straight cylinder part
+  const capHeight = 0.12;       // how tall the rounded cap is (flattened)
+  const torsoTotalYCenter = 0.05; // keep same center as original capsule
 
   return (
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
       <group rotation={[0, player.rotation.y, 0]} scale={[size, size, size]}>
         
-        {/* PILL-SHAPED TORSO */}
-        <group position={off("torso") ? [off("torso")!.x, off("torso")!.y, off("torso")!.z] : [0, torsoYOffset, 0]}>
-          {/* Middle cylinder */}
+        {/* ROUNDED CYLINDER TORSO (subtle rounding) */}
+        <group position={off("torso") ? [off("torso")!.x, off("torso")!.y, off("torso")!.z] : [0, torsoTotalYCenter, 0]}>
+          {/* Main cylinder */}
           <mesh castShadow position={[0, 0, 0]}>
             <cylinderGeometry args={[torsoRadius, torsoRadius, torsoHeight, 24, 16]} />
             <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
           </mesh>
-          {/* Top hemisphere (rounded top) */}
-          <mesh castShadow position={[0, torsoHeight / 2, 0]}>
+          
+          {/* Top cap – flattened sphere (gentle rounding) */}
+          <mesh castShadow position={[0, torsoHeight / 2 + capHeight / 2, 0]} scale={[1, capHeight / torsoRadius, 1]}>
             <sphereGeometry args={[torsoRadius, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2]} />
             <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
           </mesh>
-          {/* Bottom hemisphere (rounded bottom) */}
-          <mesh castShadow position={[0, -torsoHeight / 2, 0]}>
+          
+          {/* Bottom cap – flattened sphere (gentle rounding) */}
+          <mesh castShadow position={[0, -torsoHeight / 2 - capHeight / 2, 0]} scale={[1, capHeight / torsoRadius, 1]}>
             <sphereGeometry args={[torsoRadius, 24, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2]} />
             <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
           </mesh>
@@ -140,7 +141,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </group>
         )}
 
-        {/* LEGS */}
+        {/* LEGS (unchanged) */}
         <group position={off("rightLeg") ? [off("rightLeg")!.x, off("rightLeg")!.y, off("rightLeg")!.z] : [0.18, -0.45, 0]} rotation={rag ? [0, 0, 0] : [-swing, 0, 0]}>
           <mesh position={[0, -0.18, 0]} castShadow>
             <capsuleGeometry args={[0.13, 0.34, 6, 12]} />
