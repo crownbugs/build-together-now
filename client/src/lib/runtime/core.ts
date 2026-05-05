@@ -1,10 +1,10 @@
 // core.ts
 import type { GameObject, Script } from "@shared/schema";
-import { TweenManager } from "./runtime/tween";
-import { HierarchyIndex } from "./runtime/hierarchy";
-import { raycast as raycastWorld } from "./runtime/raycast";
-import { resolveObjectCollisions } from "./runtime/collision";
-import { NetworkBus } from "./runtime/network";
+import { TweenManager } from "./tween";
+import { HierarchyIndex } from "./hierarchy";
+import { raycast as raycastWorld } from "./raycast";
+import { resolveObjectCollisions } from "./collision";
+import { NetworkBus } from "./network";
 
 import {
   type ContainerName,
