@@ -1,47 +1,67 @@
 # Game Runtime — Architecture
 
-The runtime is a small Roblox-style game engine. Engine-managed concerns
-(clock, physics, rendering, input, replication) live here so user scripts
-only have to write game logic.
+Roblox-style mini engine. Engine-managed concerns (clock, physics, rendering,
+input, replication, camera, player rig) live here so user scripts only have to
+write game logic.
 
 ```
 client/src/lib/
-├── gameRuntime.ts          # Public engine surface: GameRuntime + GameAPI.
-│                           # Owns the heartbeat, exposes create/destroy/
-│                           # raycast/network/tween/etc. to scripts.
+├── gameRuntime.ts              # Public re-export shim. Consumers import from here.
 └── runtime/
-    ├── tween.ts            # Engine-managed property animations.
-    ├── hierarchy.ts        # Parent/child indexing + cascade operations.
-    ├── collision.ts        # Object-vs-object resolution (canCollide).
-    ├── raycast.ts          # AABB / sphere ray intersection.
-    └── network.ts          # Local server↔client replication bus
-                            # (snapshots out, inputs in). Pluggable transport.
+    ├── core.ts                 # GameRuntime class (heartbeat, step(), buildApi)
+    ├── types.ts                # Shared types + EventBus + DEFAULT_PROPERTIES
+    ├── api.ts                  # Emitter, Callable, WeakTable, Class, TagManager,
+    │                           # TaskScheduler, weakRef
+    ├── compile.ts              # Sandbox: source -> AsyncFunction factory
+    ├── docs.ts                 # DEFAULT_SCRIPT + SCRIPTING_DOCS
+    ├── hierarchy.ts            # Parent/child indexing + cascade ops
+    ├── tween.ts                # Property tweens
+    ├── raycast.ts              # AABB / sphere ray intersection
+    ├── collision.ts            # Object-vs-object resolution (canCollide)
+    └── network.ts              # Local server↔client replication bus
 ```
 
 ## Heartbeat phases
 
 `GameRuntime.step(dt)` runs phases in this fixed order each frame:
 
-1. **Input** — drains queued key events, fires `runService.input`.
+1. **Input** — drains key events, fires `runService.input`.
 2. **Animation** — ticks tweens + auto properties, fires `runService.animation`.
 3. **Replication** — pushes snapshots / pulls input via `network`,
    fires `runService.replication`.
-4. **Physics** — gravity, movement, object collisions, fires `runService.physics`.
+4. **Physics** — gravity, movement, object collisions, motor pinning,
+   ragdoll integration, kill-Y check, fires `runService.physics`.
 5. **Render** — React re-renders from runtime state.
+6. **Update** — generic per-frame fan-out.
 
-## What devs write vs. what the engine does
+## What the engine guarantees out of the box
 
-| Engine handles                     | Devs handle                       |
-|------------------------------------|-----------------------------------|
-| Clock (≈60 FPS)                    | Game logic (rules, scoring)       |
-| Gravity, velocity, collisions      | Spawning / destroying objects     |
-| Rendering (3D + GUI)               | Reactions to events (`on(...)`)   |
-| Input capture (keys/mouse/touch)   | Tweens to animate                 |
-| Replication ticks                  | What to send/receive on the wire  |
+- **Baseplate + SpawnLocation** auto-spawn if the world has no ground/spawn.
+- **Sprint** with Shift (`player.runSpeed`).
+- **Camera-relative movement** with smoothed `cameraForward` so input never jitters.
+- **Ragdoll death** when `player.health <= 0` or `player.position.y < player.killY`.
+- **Motors** to hold/attach objects to the avatar rig (`player.motors.attach(slot, obj)`).
+- **Scriptable camera** (third / first / free / scripted modes).
+- **ModuleScript** loading via `require("Name")`.
 
 ## Adding a new engine subsystem
 
 1. Create `runtime/<feature>.ts` with a focused class/API.
-2. Wire it in `gameRuntime.ts` constructor, expose via `GameAPI`.
+2. Wire it in the `GameRuntime` constructor, expose via `GameAPI` in `types.ts`.
 3. Hook into the appropriate `step()` phase.
-4. Document in `SCRIPTING_DOCS`.
+4. Document in `runtime/docs.ts` (`SCRIPTING_DOCS`).
+
+## Component layout (consumer side)
+
+```
+client/src/components/play/
+├── PlayCanvasErrorBoundary.tsx # WebGL/canvas error fallback
+├── Primitive.tsx               # One RuntimeObject -> one Three mesh
+├── Avatar.tsx                  # Player rig with walk/run/ragdoll states
+├── ChaseCameraRig.tsx          # Reads runtime.camera, drives Three camera
+├── GuiOverlay.tsx              # Mirrors runtime.gui (text + buttons)
+└── VirtualJoystick.tsx         # Mobile analog stick (event-isolated)
+```
+
+`PlayMode.tsx` is a thin shell that owns the keyboard listener, builds the
+`GameRuntime`, and composes the components above.
