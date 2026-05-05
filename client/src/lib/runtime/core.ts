@@ -769,7 +769,7 @@ export class GameRuntime {
     const taskApi = {
       wait: (seconds: number) => this.taskScheduler.wait(seconds),
       delay: (seconds: number, callback: () => void) => this.taskScheduler.delay(seconds, callback),
-      spawn: (fn: Function, ...args: any[]) => this.taskScheduler.spawn(fn, ...args),
+      spawn: (fn: (...args: any[]) => any, ...args: any[]) => this.taskScheduler.spawn(fn, ...args),
     };
     const debugApi = {
       getChildren: (obj: RuntimeObject) => obj.children,

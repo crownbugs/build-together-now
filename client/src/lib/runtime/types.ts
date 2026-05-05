@@ -307,7 +307,7 @@ export type GameAPI = {
   task: {
     wait: (seconds: number) => Promise<void>;
     delay: (seconds: number, callback: () => void) => () => void;
-    spawn: (fn: Function, ...args: any[]) => void;
+    spawn: (fn: (...args: any[]) => any, ...args: any[]) => void;
   };
   debug: {
     getChildren: (obj: RuntimeObject) => RuntimeObject[];
