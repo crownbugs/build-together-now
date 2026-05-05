@@ -1173,30 +1173,41 @@ export class GameRuntime {
     const rx = fy * p.up.z - fz * p.up.y;
     const rz = fx * p.up.y - fy * p.up.x;
 
-    const speed = p.speed || 6;
+    // Sprint: Shift doubles toward p.runSpeed.
+    const sprinting = !!(this.input.keys["shift"] || this.input.keys["shiftleft"] || this.input.keys["shiftright"]);
+    const baseSpeed = sprinting ? (p.runSpeed || p.speed * 1.6) : (p.walkSpeed || p.speed);
+    p.speed = baseSpeed;
+
     const wantX = rx * this.input.moveX - fx * this.input.moveZ;
     const wantZ = rz * this.input.moveX - fz * this.input.moveZ;
     const upVelDot = p.velocity.x * p.up.x + p.velocity.y * p.up.y + p.velocity.z * p.up.z;
-    p.velocity.x = wantX * speed + p.up.x * upVelDot;
-    p.velocity.z = wantZ * speed + p.up.z * upVelDot;
 
-    if (p.autoFaceMovement) {
-      const moveMag = Math.hypot(wantX, wantZ);
-      if (moveMag > 0.05) {
-        const targetYaw = Math.atan2(wantX, wantZ);
-        let diff = targetYaw - p.rotation.y;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        p.rotation.y += diff * Math.min(1, dt * 12);
+    if (!p.ragdoll) {
+      p.velocity.x = wantX * baseSpeed + p.up.x * upVelDot;
+      p.velocity.z = wantZ * baseSpeed + p.up.z * upVelDot;
+
+      if (p.autoFaceMovement) {
+        const moveMag = Math.hypot(wantX, wantZ);
+        if (moveMag > 0.05) {
+          const targetYaw = Math.atan2(wantX, wantZ);
+          let diff = targetYaw - p.rotation.y;
+          while (diff > Math.PI) diff -= Math.PI * 2;
+          while (diff < -Math.PI) diff += Math.PI * 2;
+          p.rotation.y += diff * Math.min(1, dt * 12);
+        }
       }
-    }
 
-    if (this.input.jump && p.onGround) {
-      const jp = p.jumpPower || 8;
-      p.velocity.x += p.up.x * jp;
-      p.velocity.y += p.up.y * jp;
-      p.velocity.z += p.up.z * jp;
-      p.onGround = false;
+      if (this.input.jump && p.onGround) {
+        const jp = p.jumpPower || 8;
+        p.velocity.x += p.up.x * jp;
+        p.velocity.y += p.up.y * jp;
+        p.velocity.z += p.up.z * jp;
+        p.onGround = false;
+      }
+    } else {
+      // Ragdolled: scrub horizontal control velocity so the body just falls.
+      p.velocity.x *= 1 - Math.min(1, dt * 2);
+      p.velocity.z *= 1 - Math.min(1, dt * 2);
     }
 
     p.velocity.x += gravityVec.x * dt;
@@ -1208,6 +1219,8 @@ export class GameRuntime {
 
     for (const o of this.objectList) {
       if (o.anchored || o.container !== "Workspace") continue;
+      // Skip motor-pinned objects — their position is driven by the rig.
+      if (this._motorPinnedIds.has(o.id)) continue;
       const og = this.computeGravityForTarget(o.position, o.id, o.name, false);
       o.velocity.x += og.x * dt;
       o.velocity.y += og.y * dt;
@@ -1226,14 +1239,36 @@ export class GameRuntime {
 
     this.runPickupSweep();
 
-    if (p.position.y < 1) {
-      p.position.y = 1;
-      if (p.velocity.y < 0) p.velocity.y = 0;
-      p.onGround = true;
-      const f = 1 - Math.min(1, 0.4 * 8 * dt);
-      p.velocity.x *= f;
-      p.velocity.z *= f;
-    } else if (p.position.y > 1.001) p.onGround = false;
+    // Apply motors AFTER physics so held objects snap to the rig regardless
+    // of where the underlying physics tried to move them.
+    this.applyMotors();
+
+    // Update animation hint based on motion + ground state. Scripts can
+    // override via player.motors.animation = "custom".
+    this.updatePlayerAnimation();
+
+    // Fall-out-of-world: if the player drops below killY, kill them.
+    if (!p.ragdoll && p.position.y < p.killY) {
+      p.kill();
+    }
+
+    // Once the ragdoll timer elapses, respawn automatically.
+    if (p.ragdoll && this.time >= this._ragdollUntil) {
+      p.respawn();
+    }
+
+    // Advance ragdoll limb positions/velocities purely visually; gravity only.
+    if (p.ragdoll && this._ragdollPos && this._ragdollVel) {
+      const g = -this.physics.gravity;
+      for (const k of Object.keys(this._ragdollPos)) {
+        const pos = this._ragdollPos[k];
+        const vel = this._ragdollVel[k];
+        vel.y += g * dt;
+        pos.x += vel.x * dt;
+        pos.y += vel.y * dt;
+        pos.z += vel.z * dt;
+      }
+    }
 
     this.runTouchSweep();
     resolveObjectCollisions(this.objectList);
@@ -1255,12 +1290,60 @@ export class GameRuntime {
 
     this.taskScheduler.step(this.time);
 
-    if (p.health <= 0 && (this as any)._lastHealth > 0) { this._events.emit("playerDied", [p], () => {}); p.respawn(); this._events.emit("playerSpawned", [p], () => {}); }
-    (this as any)._lastHealth = p.health;
-
     this.input.jump = false;
     this._prevKeys = { ...this.input.keys };
     this.buildApi(dt);
+  }
+
+  private get _motorPinnedIds(): Set<string> {
+    const s = new Set<string>();
+    for (const m of this.motorState.values()) s.add(m.obj.id);
+    return s;
+  }
+
+  /** Pin every motor-attached object to the player rig. */
+  private applyMotors() {
+    if (this.motorState.size === 0) return;
+    const p = this.player;
+    const cosY = Math.cos(p.rotation.y), sinY = Math.sin(p.rotation.y);
+    const slotOffsets: Record<string, Vec3> = {
+      rightHand: { x: 0.55, y: 0.1, z: 0.1 },
+      leftHand:  { x: -0.55, y: 0.1, z: 0.1 },
+      back:      { x: 0, y: 0.3, z: -0.35 },
+      head:      { x: 0, y: 0.95, z: 0 },
+      torso:     { x: 0, y: 0.2, z: 0 },
+    };
+    for (const [slot, m] of this.motorState) {
+      const base = slotOffsets[slot] ?? { x: 0, y: 0, z: 0 };
+      const lx = base.x + m.offset.x;
+      const ly = base.y + m.offset.y;
+      const lz = base.z + m.offset.z;
+      // Rotate offset by player yaw around up axis (assume world-up for now).
+      const wx = lx * cosY + lz * sinY;
+      const wz = -lx * sinY + lz * cosY;
+      m.obj.position.x = p.position.x + wx;
+      m.obj.position.y = p.position.y + ly;
+      m.obj.position.z = p.position.z + wz;
+      m.obj.rotation.x = m.rotation.x;
+      m.obj.rotation.y = p.rotation.y + m.rotation.y;
+      m.obj.rotation.z = m.rotation.z;
+      m.obj.velocity.x = 0; m.obj.velocity.y = 0; m.obj.velocity.z = 0;
+    }
+  }
+
+  private updatePlayerAnimation() {
+    const p = this.player;
+    if (p.ragdoll) { p.motors.animation = "ragdoll"; return; }
+    const horiz = Math.hypot(p.velocity.x, p.velocity.z);
+    if (!p.onGround) {
+      p.motors.animation = p.velocity.y > 0.5 ? "jump" : "fall";
+    } else if (horiz > (p.walkSpeed ?? 6) * 1.15) {
+      p.motors.animation = "run";
+    } else if (horiz > 0.3) {
+      p.motors.animation = "walk";
+    } else {
+      p.motors.animation = "idle";
+    }
   }
 
   private runTouchSweep() {
