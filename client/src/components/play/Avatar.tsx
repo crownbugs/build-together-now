@@ -12,8 +12,7 @@ import { GameRuntime, type RuntimePlayer } from "@/lib/gameRuntime";
  * limbs render at offsets read from `runtime._ragdollPos`.
  * 
  * The torso is a cylinder with slightly rounded top and bottom edges.
- * Shoulders are curved tubes that start at the torso side and curve
- * naturally into the arm – no overshoot, no overlapping.
+ * Shoulders are simple L‑shaped bars: horizontal from torso side, then vertical down to the arm.
  */
 export default function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRuntime }) {
   const anim = player.motors.animation;
@@ -29,15 +28,14 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const rag = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const off = (k: string) => (rag && rag[k] ? rag[k] : null);
 
-  // Shoulder curve attachment points
-  const torsoRightStart = new THREE.Vector3(0.32, 0.33, 0);
-  const torsoLeftStart = new THREE.Vector3(-0.32, 0.33, 0);
+  // Shoulder attachment points
+  const torsoRightSide = new THREE.Vector3(0.32, 0.33, 0);
+  const shoulderCorner = new THREE.Vector3(0.42, 0.33, 0);
   const rightArmTop = new THREE.Vector3(0.42, 0.18, 0);
-  const leftArmTop = new THREE.Vector3(-0.42, 0.18, 0);
   
-  // Control points for smooth bezier – bulges slightly outward but never goes past the arm
-  const rightCtrl = new THREE.Vector3(0.50, 0.28, 0);
-  const leftCtrl = new THREE.Vector3(-0.50, 0.28, 0);
+  const torsoLeftSide = new THREE.Vector3(-0.32, 0.33, 0);
+  const leftShoulderCorner = new THREE.Vector3(-0.42, 0.33, 0);
+  const leftArmTop = new THREE.Vector3(-0.42, 0.18, 0);
 
   const defaultRightArmPos = rightArmTop;
   const defaultLeftArmPos = leftArmTop;
@@ -55,12 +53,24 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const capHeight = 0.135;
   const torsoTotalYCenter = 0.05;
 
-  // Helper to create a curved tube along a quadratic bezier
-  const createCurvedShoulder = (start: THREE.Vector3, control: THREE.Vector3, end: THREE.Vector3) => {
-    const curve = new THREE.QuadraticBezierCurve3(start, control, end);
-    const tubeGeometry = new THREE.TubeGeometry(curve, 20, 0.11, 8, false);
-    return <mesh geometry={tubeGeometry} castShadow receiveShadow material={new THREE.MeshStandardMaterial({ color: player.color, roughness: 0.55, metalness: 0.05 })} />;
+  // Helper: create a cylinder between two points
+  const createCylBetween = (p1: THREE.Vector3, p2: THREE.Vector3, radius: number, material: THREE.Material) => {
+    const start = new THREE.Vector3(p1.x, p1.y, p1.z);
+    const end = new THREE.Vector3(p2.x, p2.y, p2.z);
+    const dir = new THREE.Vector3().subVectors(end, start);
+    const length = dir.length();
+    const center = start.clone().add(dir.clone().multiplyScalar(0.5));
+    const quaternion = new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      dir.clone().normalize()
+    );
+    const geometry = new THREE.CylinderGeometry(radius, radius, length, 8);
+    return (
+      <mesh geometry={geometry} position={center} quaternion={quaternion} material={material} castShadow receiveShadow />
+    );
   };
+
+  const shoulderMaterial = new THREE.MeshStandardMaterial({ color: player.color, roughness: 0.55, metalness: 0.05 });
 
   return (
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
@@ -90,8 +100,13 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </mesh>
         )}
 
-        {/* CURVED RIGHT SHOULDER */}
-        {!rag && createCurvedShoulder(torsoRightStart, rightCtrl, rightArmTop)}
+        {/* RIGHT SHOULDER – horizontal then vertical lines */}
+        {!rag && (
+          <>
+            {createCylBetween(torsoRightSide, shoulderCorner, 0.1, shoulderMaterial)}
+            {createCylBetween(shoulderCorner, rightArmTop, 0.1, shoulderMaterial)}
+          </>
+        )}
 
         {/* RIGHT ARM */}
         {!rag ? (
@@ -120,8 +135,13 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </group>
         )}
 
-        {/* CURVED LEFT SHOULDER */}
-        {!rag && createCurvedShoulder(torsoLeftStart, leftCtrl, leftArmTop)}
+        {/* LEFT SHOULDER – horizontal then vertical lines */}
+        {!rag && (
+          <>
+            {createCylBetween(torsoLeftSide, leftShoulderCorner, 0.1, shoulderMaterial)}
+            {createCylBetween(leftShoulderCorner, leftArmTop, 0.1, shoulderMaterial)}
+          </>
+        )}
 
         {/* LEFT ARM */}
         {!rag ? (
