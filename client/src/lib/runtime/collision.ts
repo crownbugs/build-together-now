@@ -9,7 +9,7 @@
  * hundreds of parts a beginner-friendly engine deals with. Spatial hashing
  * is a future optimization.
  */
-import type { RuntimeObject } from "../gameRuntime";
+import type { RuntimeObject } from "./types";
 
 function half(o: RuntimeObject) {
   return {

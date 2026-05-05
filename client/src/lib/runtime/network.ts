@@ -14,7 +14,7 @@
  *
  * Both sides also expose `broadcast` / `send` / `on` for custom channels.
  */
-import type { RuntimeObject, RuntimePlayer, Vec3 } from "../gameRuntime";
+import type { RuntimeObject, RuntimePlayer, Vec3 } from "./types";
 
 export type NetSnapshot = {
   t: number;

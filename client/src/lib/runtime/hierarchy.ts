@@ -10,7 +10,7 @@
  * world space. We can layer transform inheritance on later without breaking
  * the API.
  */
-import type { RuntimeObject } from "../gameRuntime";
+import type { RuntimeObject } from "./types";
 
 export class HierarchyIndex {
   private childrenByParent = new Map<string | null, Set<string>>();

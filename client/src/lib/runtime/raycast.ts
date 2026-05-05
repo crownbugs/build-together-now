@@ -9,7 +9,7 @@
  *   const hit = raycast(player.position, { x: 0, y: -1, z: 0 }, 5);
  *   if (hit) log("standing on", hit.object.name, "at distance", hit.distance);
  */
-import type { RuntimeObject, Vec3 } from "../gameRuntime";
+import type { RuntimeObject, Vec3 } from "./types";
 
 export type RaycastResult = {
   object: RuntimeObject;
