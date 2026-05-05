@@ -17,18 +17,36 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const rag = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const off = (k: string) => (rag && rag[k] ? rag[k] : null);
 
-  // --- Shared material ---
+  // --- Materials (original avatar colors) ---
   const bodyMaterial = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        color: 0x3a3a3a,
-        roughness: 0.75,
-        metalness: 0.0,
+        color: player.color,
+        roughness: 0.55,
+        metalness: 0.05,
+      }),
+    [player.color]
+  );
+
+  const headMaterial = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: 0x7a3e19,
+        roughness: 0.6,
       }),
     []
   );
 
-  // --- Torso (tapered rounded box) ---
+  const legMaterial = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: 0x2a3142,
+        roughness: 0.7,
+      }),
+    []
+  );
+
+  // --- All geometries from your HTML (unsclaed) ---
   const torsoGeo = useMemo(() => {
     const torsoTopWidth = 2.4;
     const torsoBottomWidth = 1.45;
@@ -48,7 +66,6 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     return geo;
   }, []);
 
-  // --- Neck (cylinder) ---
   const neckGeo = useMemo(() => {
     const neckHeight = 0.35;
     const neckTopRadius = 0.32;
@@ -56,10 +73,8 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     return new THREE.CylinderGeometry(neckTopRadius, neckBottomRadius, neckHeight, 18);
   }, []);
 
-  // --- Head (sphere) ---
   const headGeo = useMemo(() => new THREE.SphereGeometry(0.82, 48, 48), []);
 
-  // --- Arm geometry (tapered rounded box) ---
   const armGeo = useMemo(() => {
     const armLength = 2.48;
     const armTopWidth = 0.58;
@@ -82,10 +97,8 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     return geo;
   }, []);
 
-  // --- Hand geometry ---
   const handGeo = useMemo(() => new RoundedBoxGeometry(0.38, 0.45, 0.45, 8, 0.18), []);
 
-  // --- Hip geometry ---
   const hipGeo = useMemo(() => {
     const hipWidth = 1.55;
     const hipHeight = 0.68;
@@ -94,7 +107,6 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     return new RoundedBoxGeometry(hipWidth, hipHeight, hipDepth, 10, hipRadius);
   }, []);
 
-  // --- Leg geometry (tapered rounded box) ---
   const legGeo = useMemo(() => {
     const legLength = 2.45;
     const legTopWidth = 0.52;
@@ -114,10 +126,9 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     return geo;
   }, []);
 
-  // --- Foot geometry ---
   const footGeo = useMemo(() => new RoundedBoxGeometry(0.6, 0.4, 0.95, 8, 0.2), []);
 
-  // --- Compute shoulder X based on torso width at arm centre Y ---
+  // --- Compute shoulder X (same as HTML) ---
   const torsoHeightVal = 2.75;
   const torsoBottomWidth = 1.45;
   const torsoTopWidth = 2.4;
@@ -126,41 +137,20 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const torsoHalfHeight = torsoHeightVal / 2;
   const armAttachT = (armCenterY + 2.48 / 2 - torsoY + torsoHalfHeight) / torsoHeightVal;
   const torsoWidthAtArmTop = torsoBottomWidth * (1.0 + armAttachT * (torsoTopWidth / torsoBottomWidth - 1.0));
-  const edgeInset = 0.48 * 0.2; // torsoRadius * 0.2
+  const edgeInset = 0.48 * 0.2;
   const naturalArmX = Math.min(torsoWidthAtArmTop / 2 - edgeInset + 0.58 / 2, 1.15);
+  const shoulderY = armCenterY + 2.48 / 2;
+  const hipY = -0.85 + 2.45 / 2;
 
-  // --- Pivot points for swing animation ---
-  const shoulderY = armCenterY + 2.48 / 2; // 0.85 + 1.24 = 2.09
-  const hipY = -0.85 + 2.45 / 2; // -0.85 + 1.225 = 0.375
-
-  // --- Swing value (updated in useFrame) ---
+  // --- Swing animation ---
   const swingRef = useRef(0);
-  useFrame(({ clock }) => {
-    const time = runtime.time;
-    const swingValue = Math.sin(time * swingSpeed) * 0.6 * moveAmount;
+  useFrame(() => {
+    const swingValue = Math.sin(runtime.time * swingSpeed) * 0.6 * moveAmount;
     swingRef.current = swingValue;
   });
 
-  // --- Helper to build a limb with pivot rotation ---
-  const Limb = ({
-    pivotPos,
-    meshPos,
-    geometry,
-    material,
-    rotation,
-    ragPos,
-    children,
-  }: {
-    pivotPos: [number, number, number];
-    meshPos: [number, number, number];
-    geometry: THREE.BufferGeometry;
-    material: THREE.Material;
-    rotation: THREE.Euler;
-    ragPos?: THREE.Vector3 | null;
-    children?: React.ReactNode;
-  }) => {
-    const groupRef = useRef<THREE.Group>(null);
-    // If ragdoll, use ragPos as group position and disable rotation
+  // --- Helper for limbs with pivot rotation & ragdoll support ---
+  const Limb = ({ pivotPos, meshPos, geometry, material, rotation, ragPos, children }) => {
     if (rag && ragPos) {
       return (
         <group position={[ragPos.x, ragPos.y, ragPos.z]}>
@@ -170,14 +160,14 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
       );
     }
     return (
-      <group ref={groupRef} position={pivotPos} rotation={rotation}>
+      <group position={pivotPos} rotation={rotation}>
         <mesh geometry={geometry} material={material} position={meshPos} castShadow />
         {children}
       </group>
     );
   };
 
-  // Get ragdoll positions if any
+  // Ragdoll positions
   const ragTorsoPos = off("torso") ? new THREE.Vector3(off("torso")!.x, off("torso")!.y, off("torso")!.z) : null;
   const ragHeadPos = off("head") ? new THREE.Vector3(off("head")!.x, off("head")!.y, off("head")!.z) : null;
   const ragRightArmPos = off("rightArm") ? new THREE.Vector3(off("rightArm")!.x, off("rightArm")!.y, off("rightArm")!.z) : null;
@@ -185,102 +175,84 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const ragRightLegPos = off("rightLeg") ? new THREE.Vector3(off("rightLeg")!.x, off("rightLeg")!.y, off("rightLeg")!.z) : null;
   const ragLeftLegPos = off("leftLeg") ? new THREE.Vector3(off("leftLeg")!.x, off("leftLeg")!.y, off("leftLeg")!.z) : null;
 
-  // Face details (same as original)
-  const FaceDetails = () => (
-    <>
-      <mesh position={[0.2, 0.15, 0.85]} castShadow>
-        <sphereGeometry args={[0.08, 16, 16]} />
-        <meshStandardMaterial color="#000000" roughness={0.85} />
-      </mesh>
-      <mesh position={[-0.2, 0.15, 0.85]} castShadow>
-        <sphereGeometry args={[0.08, 16, 16]} />
-        <meshStandardMaterial color="#000000" roughness={0.85} />
-      </mesh>
-      <mesh position={[0, -0.05, 0.85]} castShadow>
-        <torusGeometry args={[0.12, 0.03, 8, 20, Math.PI]} />
-        <meshStandardMaterial color="#111111" roughness={0.5} />
-      </mesh>
-    </>
-  );
+  // Overall scale to match original avatar size (HTML dimensions ÷ ~4)
+  const CHAR_SCALE = 0.25;
 
   return (
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
       <group rotation={[0, player.rotation.y, 0]} scale={[player.size || 1, player.size || 1, player.size || 1]}>
-        {/* Torso */}
-        {!ragTorsoPos ? (
-          <mesh geometry={torsoGeo} material={bodyMaterial} position={[0, 1.05, 0]} castShadow receiveShadow />
-        ) : (
-          <mesh geometry={torsoGeo} material={bodyMaterial} position={[ragTorsoPos.x, ragTorsoPos.y, ragTorsoPos.z]} castShadow receiveShadow />
-        )}
+        <group scale={[CHAR_SCALE, CHAR_SCALE, CHAR_SCALE]}>
+          {/* Torso */}
+          {!ragTorsoPos ? (
+            <mesh geometry={torsoGeo} material={bodyMaterial} position={[0, torsoY, 0]} castShadow receiveShadow />
+          ) : (
+            <mesh geometry={torsoGeo} material={bodyMaterial} position={[ragTorsoPos.x, ragTorsoPos.y, ragTorsoPos.z]} castShadow receiveShadow />
+          )}
 
-        {/* Neck */}
-        <mesh geometry={neckGeo} material={bodyMaterial} position={[0, 2.355, 0]} castShadow />
+          {/* Neck */}
+          <mesh geometry={neckGeo} material={bodyMaterial} position={[0, 2.355, 0]} castShadow />
 
-        {/* Head */}
-        {!ragHeadPos ? (
-          <group position={[0, 3.202, 0]}>
-            <mesh geometry={headGeo} material={bodyMaterial} castShadow />
-            {!rag && <FaceDetails />}
-          </group>
-        ) : (
-          <group position={[ragHeadPos.x, ragHeadPos.y, ragHeadPos.z]}>
-            <mesh geometry={headGeo} material={bodyMaterial} castShadow />
-          </group>
-        )}
+          {/* Head (brown, no face details) */}
+          {!ragHeadPos ? (
+            <mesh geometry={headGeo} material={headMaterial} position={[0, 3.202, 0]} castShadow />
+          ) : (
+            <mesh geometry={headGeo} material={headMaterial} position={[ragHeadPos.x, ragHeadPos.y, ragHeadPos.z]} castShadow />
+          )}
 
-        {/* Hip / pelvis */}
-        <mesh geometry={hipGeo} material={bodyMaterial} position={[0, -0.144, 0]} castShadow />
+          {/* Hip (pelvis) */}
+          <mesh geometry={hipGeo} material={bodyMaterial} position={[0, -0.144, 0]} castShadow />
 
-        {/* Right Arm */}
-        <Limb
-          pivotPos={[naturalArmX, shoulderY, 0.04]}
-          meshPos={[0, -1.24, 0]}
-          geometry={armGeo}
-          material={bodyMaterial}
-          rotation={!rag ? new THREE.Euler(swingRef.current, 0, 0.1) : new THREE.Euler(0, 0, 0)}
-          ragPos={ragRightArmPos}
-        >
-          <mesh geometry={handGeo} material={bodyMaterial} position={[0, -1.24 - 0.225, 0.14]} castShadow />
-        </Limb>
+          {/* Right Arm */}
+          <Limb
+            pivotPos={[naturalArmX, shoulderY, 0.04]}
+            meshPos={[0, -1.24, 0]}
+            geometry={armGeo}
+            material={bodyMaterial}
+            rotation={!rag ? new THREE.Euler(swingRef.current, 0, 0.1) : new THREE.Euler(0, 0, 0)}
+            ragPos={ragRightArmPos}
+          >
+            <mesh geometry={handGeo} material={bodyMaterial} position={[0, -1.24 - 0.225, 0.14]} castShadow />
+          </Limb>
 
-        {/* Left Arm */}
-        <Limb
-          pivotPos={[-naturalArmX, shoulderY, 0.04]}
-          meshPos={[0, -1.24, 0]}
-          geometry={armGeo}
-          material={bodyMaterial}
-          rotation={!rag ? new THREE.Euler(-swingRef.current, 0, -0.1) : new THREE.Euler(0, 0, 0)}
-          ragPos={ragLeftArmPos}
-        >
-          <mesh geometry={handGeo} material={bodyMaterial} position={[0, -1.24 - 0.225, 0.14]} castShadow />
-        </Limb>
+          {/* Left Arm */}
+          <Limb
+            pivotPos={[-naturalArmX, shoulderY, 0.04]}
+            meshPos={[0, -1.24, 0]}
+            geometry={armGeo}
+            material={bodyMaterial}
+            rotation={!rag ? new THREE.Euler(-swingRef.current, 0, -0.1) : new THREE.Euler(0, 0, 0)}
+            ragPos={ragLeftArmPos}
+          >
+            <mesh geometry={handGeo} material={bodyMaterial} position={[0, -1.24 - 0.225, 0.14]} castShadow />
+          </Limb>
 
-        {/* Right Leg */}
-        <Limb
-          pivotPos={[0.42, hipY, 0]}
-          meshPos={[0, -1.225, 0]}
-          geometry={legGeo}
-          material={bodyMaterial}
-          rotation={!rag ? new THREE.Euler(-swingRef.current * 0.5, 0, 0) : new THREE.Euler(0, 0, 0)}
-          ragPos={ragRightLegPos}
-        >
-          <mesh geometry={footGeo} material={bodyMaterial} position={[0, -1.225 - 0.2, 0.18]} castShadow />
-        </Limb>
+          {/* Right Leg (dark) */}
+          <Limb
+            pivotPos={[0.42, hipY, 0]}
+            meshPos={[0, -1.225, 0]}
+            geometry={legGeo}
+            material={legMaterial}
+            rotation={!rag ? new THREE.Euler(-swingRef.current * 0.5, 0, 0) : new THREE.Euler(0, 0, 0)}
+            ragPos={ragRightLegPos}
+          >
+            <mesh geometry={footGeo} material={legMaterial} position={[0, -1.225 - 0.2, 0.18]} castShadow />
+          </Limb>
 
-        {/* Left Leg */}
-        <Limb
-          pivotPos={[-0.42, hipY, 0]}
-          meshPos={[0, -1.225, 0]}
-          geometry={legGeo}
-          material={bodyMaterial}
-          rotation={!rag ? new THREE.Euler(swingRef.current * 0.5, 0, 0) : new THREE.Euler(0, 0, 0)}
-          ragPos={ragLeftLegPos}
-        >
-          <mesh geometry={footGeo} material={bodyMaterial} position={[0, -1.225 - 0.2, 0.18]} castShadow />
-        </Limb>
+          {/* Left Leg (dark) */}
+          <Limb
+            pivotPos={[-0.42, hipY, 0]}
+            meshPos={[0, -1.225, 0]}
+            geometry={legGeo}
+            material={legMaterial}
+            rotation={!rag ? new THREE.Euler(swingRef.current * 0.5, 0, 0) : new THREE.Euler(0, 0, 0)}
+            ragPos={ragLeftLegPos}
+          >
+            <mesh geometry={footGeo} material={legMaterial} position={[0, -1.225 - 0.2, 0.18]} castShadow />
+          </Limb>
+        </group>
 
-        {/* Name tag */}
-        <Html position={[0, 3.8, 0]} center distanceFactor={8} zIndexRange={[100, 0]} sprite>
+        {/* Name tag (scaled with original avatar size) */}
+        <Html position={[0, 1.25, 0]} center distanceFactor={8} zIndexRange={[100, 0]} sprite>
           <div className="px-2 py-0.5 rounded-md bg-black/70 text-white text-xs font-medium whitespace-nowrap pointer-events-none">
             {player.username}
           </div>
