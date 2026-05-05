@@ -2,18 +2,6 @@ import { Html } from "@react-three/drei";
 import * as THREE from "three";
 import { GameRuntime, type RuntimePlayer } from "@/lib/gameRuntime";
 
-/**
- * 3rd-person character mesh. Orientation is built from the player's "up"
- * vector (so feet point at gravity) plus a Y rotation managed by the
- * runtime's autoFaceMovement / script logic.
- *
- * Walk/run animation cycles are driven by `player.motors.animation` so
- * scripts can override (e.g. set "shoot", "wave"). When the player ragdolls,
- * limbs render at offsets read from `runtime._ragdollPos`.
- * 
- * The torso is a cylinder with slightly rounded top and bottom edges.
- * Shoulders are simple L‑shaped bars: horizontal from torso side, then vertical down to the arm.
- */
 export default function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRuntime }) {
   const anim = player.motors.animation;
   const horiz = Math.hypot(player.velocity.x, player.velocity.z);
@@ -28,7 +16,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const rag = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const off = (k: string) => (rag && rag[k] ? rag[k] : null);
 
-  // Shoulder attachment points
+  // Shoulder attachment points – L‑shape: horizontal then vertical
   const torsoRightSide = new THREE.Vector3(0.32, 0.33, 0);
   const shoulderCorner = new THREE.Vector3(0.42, 0.33, 0);
   const rightArmTop = new THREE.Vector3(0.42, 0.18, 0);
@@ -100,15 +88,20 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </mesh>
         )}
 
-        {/* RIGHT SHOULDER – horizontal then vertical lines */}
+        {/* RIGHT SHOULDER – horizontal + vertical + corner sphere to fill the gap */}
         {!rag && (
           <>
-            {createCylBetween(torsoRightSide, shoulderCorner, 0.1, shoulderMaterial)}
-            {createCylBetween(shoulderCorner, rightArmTop, 0.1, shoulderMaterial)}
+            {createCylBetween(torsoRightSide, shoulderCorner, 0.11, shoulderMaterial)}
+            {createCylBetween(shoulderCorner, rightArmTop, 0.11, shoulderMaterial)}
+            {/* Corner filler sphere – smooths the L‑joint */}
+            <mesh position={shoulderCorner} castShadow receiveShadow>
+              <sphereGeometry args={[0.13, 12, 12]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
           </>
         )}
 
-        {/* RIGHT ARM */}
+        {/* RIGHT ARM (same as before) */}
         {!rag ? (
           <group position={rightShoulderPos}>
             <group position={rightArmLocalPos} rotation={[swing, 0, 0.05]}>
@@ -135,11 +128,15 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </group>
         )}
 
-        {/* LEFT SHOULDER – horizontal then vertical lines */}
+        {/* LEFT SHOULDER – horizontal + vertical + corner sphere */}
         {!rag && (
           <>
-            {createCylBetween(torsoLeftSide, leftShoulderCorner, 0.1, shoulderMaterial)}
-            {createCylBetween(leftShoulderCorner, leftArmTop, 0.1, shoulderMaterial)}
+            {createCylBetween(torsoLeftSide, leftShoulderCorner, 0.11, shoulderMaterial)}
+            {createCylBetween(leftShoulderCorner, leftArmTop, 0.11, shoulderMaterial)}
+            <mesh position={leftShoulderCorner} castShadow receiveShadow>
+              <sphereGeometry args={[0.13, 12, 12]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
           </>
         )}
 
@@ -170,7 +167,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </group>
         )}
 
-        {/* LEGS */}
+        {/* LEGS (unchanged) */}
         <group position={off("rightLeg") ? [off("rightLeg")!.x, off("rightLeg")!.y, off("rightLeg")!.z] : [0.18, -0.45, 0]} rotation={rag ? [0, 0, 0] : [-swing, 0, 0]}>
           <mesh position={[0, -0.18, 0]} castShadow>
             <capsuleGeometry args={[0.13, 0.34, 6, 12]} />
@@ -184,7 +181,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </mesh>
         </group>
 
-        {/* HEAD */}
+        {/* HEAD (unchanged) */}
         <mesh position={off("head") ? [off("head")!.x, off("head")!.y, off("head")!.z] : [0, 0.7, 0]} castShadow>
           <sphereGeometry args={[0.3, 24, 24]} />
           <meshStandardMaterial color="#7a3e19" roughness={0.6} />
