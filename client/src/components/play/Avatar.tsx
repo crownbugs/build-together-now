@@ -25,41 +25,113 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const rag = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const off = (k: string) => (rag && rag[k] ? rag[k] : null);
 
-  // Shoulder color - slightly lighter/different than torso for visual joint definition
-  const shoulderColor = player.color;
-
   return (
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
       <group rotation={[0, player.rotation.y, 0]} scale={[size, size, size]}>
-        {/* TORSO - slightly wider, shorter capsule for blockier look */}
-        <mesh position={off("torso") ? [off("torso")!.x, off("torso")!.y, off("torso")!.z] : [0, 0.08, 0]} castShadow>
-          <capsuleGeometry args={[0.35, 0.6, 8, 16]} />
+        {/* TORSO — rounded box, fully solid with curved edges */}
+        <mesh position={off("torso") ? [off("torso")!.x, off("torso")!.y, off("torso")!.z] : [0, 0.05, 0]} castShadow>
+          <boxGeometry args={[0.6, 0.75, 0.35]} />
           <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
         </mesh>
+        {/* Torso edge rounding — 4 corner cylinders + top/bottom spheres to make it pill-like but square */}
         {!rag && (
-          <mesh position={[0, -0.22, 0]} castShadow>
-            <cylinderGeometry args={[0.37, 0.37, 0.08, 24]} />
-            <meshStandardMaterial color="#1f2733" roughness={0.7} />
-          </mesh>
+          <>
+            {/* Top edge rounding */}
+            <mesh position={[0, 0.425, 0]} castShadow>
+              <cylinderGeometry args={[0.175, 0.175, 0.6, 16, 1, false, 0, Math.PI]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            <mesh position={[0, 0.425, 0]} rotation={[0, Math.PI, 0]} castShadow>
+              <cylinderGeometry args={[0.175, 0.175, 0.6, 16, 1, false, 0, Math.PI]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            {/* Bottom edge rounding */}
+            <mesh position={[0, -0.325, 0]} castShadow>
+              <cylinderGeometry args={[0.175, 0.175, 0.6, 16, 1, false, 0, Math.PI]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            <mesh position={[0, -0.325, 0]} rotation={[0, Math.PI, 0]} castShadow>
+              <cylinderGeometry args={[0.175, 0.175, 0.6, 16, 1, false, 0, Math.PI]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            {/* Front/back edge rounding */}
+            <mesh position={[0, 0.05, 0.175]} rotation={[Math.PI / 2, 0, 0]} castShadow>
+              <cylinderGeometry args={[0.175, 0.175, 0.75, 16, 1, false, 0, Math.PI]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            <mesh position={[0, 0.05, -0.175]} rotation={[Math.PI / 2, 0, 0]} castShadow>
+              <cylinderGeometry args={[0.175, 0.175, 0.75, 16, 1, false, 0, Math.PI]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            {/* Corner spheres to fill the gaps */}
+            <mesh position={[0.3, 0.425, 0.175]} castShadow>
+              <sphereGeometry args={[0.175, 12, 12, 0, Math.PI / 2]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            <mesh position={[-0.3, 0.425, 0.175]} castShadow>
+              <sphereGeometry args={[0.175, 12, 12, Math.PI / 2, Math.PI / 2]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            <mesh position={[0.3, 0.425, -0.175]} castShadow>
+              <sphereGeometry args={[0.175, 12, 12, Math.PI, Math.PI / 2]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            <mesh position={[-0.3, 0.425, -0.175]} castShadow>
+              <sphereGeometry args={[0.175, 12, 12, -Math.PI / 2, Math.PI / 2]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            <mesh position={[0.3, -0.325, 0.175]} castShadow>
+              <sphereGeometry args={[0.175, 12, 12, 0, Math.PI / 2, 0, Math.PI / 2]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            <mesh position={[-0.3, -0.325, 0.175]} castShadow>
+              <sphereGeometry args={[0.175, 12, 12, Math.PI / 2, Math.PI / 2, 0, Math.PI / 2]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            <mesh position={[0.3, -0.325, -0.175]} castShadow>
+              <sphereGeometry args={[0.175, 12, 12, Math.PI, Math.PI / 2, 0, Math.PI / 2]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            <mesh position={[-0.3, -0.325, -0.175]} castShadow>
+              <sphereGeometry args={[0.175, 12, 12, -Math.PI / 2, Math.PI / 2, 0, Math.PI / 2]} />
+              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+            </mesh>
+            {/* Belt */}
+            <mesh position={[0, -0.25, 0]} castShadow>
+              <boxGeometry args={[0.62, 0.08, 0.37]} />
+              <meshStandardMaterial color="#1f2733" roughness={0.7} />
+            </mesh>
+          </>
         )}
 
-        {/* RIGHT SHOULDER JOINT */}
+        {/* RIGHT SHOULDER — bridge from torso to arm, not a floating circle */}
         <mesh 
           position={off("rightArm") 
-            ? [off("rightArm")!.x - 0.08, off("rightArm")!.y + 0.05, off("rightArm")!.z] 
-            : [0.38, 0.28, 0]
+            ? [off("rightArm")!.x - 0.12, off("rightArm")!.y + 0.08, off("rightArm")!.z] 
+            : [0.42, 0.3, 0]
           } 
           castShadow
         >
-          <sphereGeometry args={[0.14, 12, 12]} />
-          <meshStandardMaterial color={shoulderColor} roughness={0.5} metalness={0.1} />
+          <boxGeometry args={[0.2, 0.14, 0.22]} />
+          <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+        </mesh>
+        {/* Shoulder rounding */}
+        <mesh 
+          position={off("rightArm") 
+            ? [off("rightArm")!.x - 0.12, off("rightArm")!.y + 0.08, off("rightArm")!.z] 
+            : [0.42, 0.3, 0]
+          } 
+          castShadow
+        >
+          <sphereGeometry args={[0.11, 12, 12]} />
+          <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
         </mesh>
 
-        {/* RIGHT ARM GROUP - pivot point at shoulder */}
+        {/* RIGHT ARM GROUP */}
         <group 
           position={off("rightArm") 
             ? [off("rightArm")!.x, off("rightArm")!.y, off("rightArm")!.z] 
-            : [0.42, 0.18, 0]
+            : [0.52, 0.22, 0]
           } 
           rotation={rag ? [0, 0, 0] : [swing, 0, 0.05]}
         >
@@ -73,23 +145,34 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </mesh>
         </group>
 
-        {/* LEFT SHOULDER JOINT */}
+        {/* LEFT SHOULDER — bridge from torso to arm */}
         <mesh 
           position={off("leftArm") 
-            ? [off("leftArm")!.x + 0.08, off("leftArm")!.y + 0.05, off("leftArm")!.z] 
-            : [-0.38, 0.28, 0]
+            ? [off("leftArm")!.x + 0.12, off("leftArm")!.y + 0.08, off("leftArm")!.z] 
+            : [-0.42, 0.3, 0]
           } 
           castShadow
         >
-          <sphereGeometry args={[0.14, 12, 12]} />
-          <meshStandardMaterial color={shoulderColor} roughness={0.5} metalness={0.1} />
+          <boxGeometry args={[0.2, 0.14, 0.22]} />
+          <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+        </mesh>
+        {/* Shoulder rounding */}
+        <mesh 
+          position={off("leftArm") 
+            ? [off("leftArm")!.x + 0.12, off("leftArm")!.y + 0.08, off("leftArm")!.z] 
+            : [-0.42, 0.3, 0]
+          } 
+          castShadow
+        >
+          <sphereGeometry args={[0.11, 12, 12]} />
+          <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
         </mesh>
 
-        {/* LEFT ARM GROUP - pivot point at shoulder */}
+        {/* LEFT ARM GROUP */}
         <group 
           position={off("leftArm") 
             ? [off("leftArm")!.x, off("leftArm")!.y, off("leftArm")!.z] 
-            : [-0.42, 0.18, 0]
+            : [-0.52, 0.22, 0]
           } 
           rotation={rag ? [0, 0, 0] : [-swing, 0, -0.05]}
         >
