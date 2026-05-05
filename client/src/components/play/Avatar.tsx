@@ -8,16 +8,25 @@ import { useFrame } from "@react-three/fiber";
 export default function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRuntime }) {
   const anim = player.motors.animation;
   const horiz = Math.hypot(player.velocity.x, player.velocity.z);
-  const moveAmount = Math.min(1, horiz / Math.max(1, player.runSpeed || player.speed));
+  const maxSpeed = Math.max(1, player.runSpeed || player.speed);
+  const moveAmount = Math.min(1, horiz / maxSpeed);
   const isRunning = anim === "run";
   const isWalking = anim === "walk";
-  const speedFactor = isRunning ? 1.4 : isWalking ? 0.7 : 0;
-  const swingSpeed = isRunning ? 13 : isWalking ? 8.5 : 0;
-  const intensity = moveAmount * (isRunning ? 1.2 : 0.9);
+  const walkSpeed = isRunning ? 6.5 : isWalking ? 4.2 : 0;
+
+  // Gait parameters – feel free to tweak
+  const strideFactor = moveAmount * (isRunning ? 1.4 : 1.0);
+  const armSwingRange = 0.9 * strideFactor;
+  const legSwingRange = 0.85 * strideFactor;
+  const elbowBendFactor = 0.5 + 0.4 * strideFactor;
+  const kneeLiftFactor = 0.3 + 0.6 * strideFactor;
+  const torsoTwistRange = 0.25 * strideFactor;
+  const hipSwayRange = 0.07 * strideFactor;
+  const headBobRange = 0.05 * strideFactor;
 
   // Orientation
-  const up = new THREE.Vector3(player.up.x, player.up.y, player.up.z).normalize();
-  const orientQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
+  const upVec = new THREE.Vector3(player.up.x, player.up.y, player.up.z).normalize();
+  const orientQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), upVec);
 
   // Ragdoll overrides
   const rag = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
@@ -30,321 +39,268 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const ragLeftLeg = off("leftLeg");
 
   // Materials
-  const bodyMaterial = useMemo(
+  const bodyMat = useMemo(
     () => new THREE.MeshStandardMaterial({ color: player.color, roughness: 0.55, metalness: 0.05 }),
     [player.color]
   );
-  const headMaterial = useMemo(() => new THREE.MeshStandardMaterial({ color: 0x7a3e19, roughness: 0.6 }), []);
-  const limbMaterial = useMemo(() => new THREE.MeshStandardMaterial({ color: 0x2a3142, roughness: 0.7 }), []);
+  const headMat = useMemo(() => new THREE.MeshStandardMaterial({ color: 0x7a3e19, roughness: 0.6 }), []);
+  const limbMat = useMemo(() => new THREE.MeshStandardMaterial({ color: 0x2a3142, roughness: 0.7 }), []);
 
-  // ---------- Geometries (segmented for articulation) ----------
-  // Torso, neck, head, hips (unchanged from original)
+  // ---------- Geometry (final size, no scaling) ----------
+  // Torso
   const torsoGeo = useMemo(() => {
-    const torsoTopWidth = 2.4, torsoBottomWidth = 1.45, torsoHeight = 2.75, torsoDepth = 0.95, torsoRadius = 0.48;
-    const geo = new RoundedBoxGeometry(torsoBottomWidth, torsoHeight, torsoDepth, 10, torsoRadius);
-    const positions = geo.attributes.position;
-    for (let i = 0; i < positions.count; i++) {
-      const y = positions.getY(i);
-      const t = (y + torsoHeight / 2) / torsoHeight;
-      const widthScale = 1.0 + t * (torsoTopWidth / torsoBottomWidth - 1.0);
-      positions.setX(i, positions.getX(i) * widthScale);
+    const topW = 0.82, bottomW = 0.5, height = 0.95, depth = 0.33, radius = 0.16;
+    const geo = new RoundedBoxGeometry(bottomW, height, depth, 10, radius);
+    const posAttr = geo.attributes.position;
+    for (let i = 0; i < posAttr.count; i++) {
+      const y = posAttr.getY(i);
+      const t = (y + height / 2) / height;
+      const wScale = 1 + t * (topW / bottomW - 1);
+      posAttr.setX(i, posAttr.getX(i) * wScale);
     }
-    positions.needsUpdate = true;
+    posAttr.needsUpdate = true;
     geo.computeVertexNormals();
     return geo;
   }, []);
 
-  const neckGeo = useMemo(() => new THREE.CylinderGeometry(0.32, 0.38, 0.35, 18), []);
-  const headGeo = useMemo(() => new THREE.SphereGeometry(0.82, 48, 48), []);
-  const hipGeo = useMemo(() => new RoundedBoxGeometry(1.55, 0.68, 0.95, 10, 0.38), []);
+  const neckGeo = useMemo(() => new THREE.CylinderGeometry(0.11, 0.13, 0.12, 12), []);
+  const headGeo = useMemo(() => new THREE.SphereGeometry(0.28, 48, 48), []);
+  const hipGeo = useMemo(() => new RoundedBoxGeometry(0.53, 0.24, 0.33, 8, 0.13), []);
 
-  // Upper arm (from shoulder to elbow)
+  // Upper arm
   const upperArmGeo = useMemo(() => {
-    const length = 1.25, width = 0.58, depth = 0.62, radius = 0.32;
-    const geo = new RoundedBoxGeometry(width, length, depth, 10, radius);
-    const positions = geo.attributes.position;
-    for (let i = 0; i < positions.count; i++) {
-      const y = positions.getY(i);
-      const t = (y + length / 2) / length;
-      const widthScale = 1.0 - t * 0.3;
-      positions.setX(i, positions.getX(i) * widthScale);
-      positions.setZ(i, positions.getZ(i) - 0.05 * Math.sin(Math.PI * t));
+    const len = 0.43, w = 0.2, d = 0.21, r = 0.11;
+    const geo = new RoundedBoxGeometry(w, len, d, 8, r);
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const y = pos.getY(i);
+      const t = (y + len / 2) / len;
+      pos.setX(i, pos.getX(i) * (1 - t * 0.35));
+      pos.setZ(i, pos.getZ(i) * (1 - t * 0.2));
     }
-    positions.needsUpdate = true;
+    pos.needsUpdate = true;
     geo.computeVertexNormals();
     return geo;
   }, []);
 
-  // Lower arm (elbow to hand)
+  // Lower arm
   const lowerArmGeo = useMemo(() => {
-    const length = 1.15, width = 0.48, depth = 0.55, radius = 0.28;
-    const geo = new RoundedBoxGeometry(width, length, depth, 8, radius);
-    const positions = geo.attributes.position;
-    for (let i = 0; i < positions.count; i++) {
-      const y = positions.getY(i);
-      const t = (y + length / 2) / length;
-      positions.setX(i, positions.getX(i) * (1 - t * 0.4));
-      positions.setZ(i, positions.getZ(i) * (1 - t * 0.2));
+    const len = 0.39, w = 0.165, d = 0.19, r = 0.1;
+    const geo = new RoundedBoxGeometry(w, len, d, 8, r);
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const y = pos.getY(i);
+      const t = (y + len / 2) / len;
+      pos.setX(i, pos.getX(i) * (1 - t * 0.4));
+      pos.setZ(i, pos.getZ(i) * (1 - t * 0.25));
     }
-    positions.needsUpdate = true;
+    pos.needsUpdate = true;
     geo.computeVertexNormals();
     return geo;
   }, []);
 
-  const handGeo = useMemo(() => new RoundedBoxGeometry(0.38, 0.45, 0.45, 8, 0.18), []);
+  const handGeo = useMemo(() => new RoundedBoxGeometry(0.13, 0.16, 0.16, 6, 0.06), []);
 
-  // Upper leg (hip to knee)
+  // Upper leg
   const upperLegGeo = useMemo(() => {
-    const length = 1.35, width = 0.52, depth = 0.68, radius = 0.32;
-    const geo = new RoundedBoxGeometry(width, length, depth, 10, radius);
-    const positions = geo.attributes.position;
-    for (let i = 0; i < positions.count; i++) {
-      const y = positions.getY(i);
-      const t = (y + length / 2) / length;
-      const scale = 1.0 - t * 0.3;
-      positions.setX(i, positions.getX(i) * scale);
-      positions.setZ(i, positions.getZ(i) * scale);
+    const len = 0.47, w = 0.18, d = 0.24, r = 0.11;
+    const geo = new RoundedBoxGeometry(w, len, d, 10, r);
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const y = pos.getY(i);
+      const t = (y + len / 2) / len;
+      const scale = 1 - t * 0.3;
+      pos.setX(i, pos.getX(i) * scale);
+      pos.setZ(i, pos.getZ(i) * scale);
     }
-    positions.needsUpdate = true;
+    pos.needsUpdate = true;
     geo.computeVertexNormals();
     return geo;
   }, []);
 
-  // Lower leg (knee to ankle)
+  // Lower leg
   const lowerLegGeo = useMemo(() => {
-    const length = 1.1, width = 0.44, depth = 0.58, radius = 0.28;
-    const geo = new RoundedBoxGeometry(width, length, depth, 8, radius);
-    const positions = geo.attributes.position;
-    for (let i = 0; i < positions.count; i++) {
-      const y = positions.getY(i);
-      const t = (y + length / 2) / length;
-      const scale = 1.0 - t * 0.25;
-      positions.setX(i, positions.getX(i) * scale);
-      positions.setZ(i, positions.getZ(i) * scale);
+    const len = 0.38, w = 0.155, d = 0.2, r = 0.1;
+    const geo = new RoundedBoxGeometry(w, len, d, 8, r);
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const y = pos.getY(i);
+      const t = (y + len / 2) / len;
+      const scale = 1 - t * 0.25;
+      pos.setX(i, pos.getX(i) * scale);
+      pos.setZ(i, pos.getZ(i) * scale);
     }
-    positions.needsUpdate = true;
+    pos.needsUpdate = true;
     geo.computeVertexNormals();
     return geo;
   }, []);
 
-  const footGeo = useMemo(() => new RoundedBoxGeometry(0.6, 0.4, 0.95, 8, 0.2), []);
+  const footGeo = useMemo(() => new RoundedBoxGeometry(0.21, 0.14, 0.33, 6, 0.07), []);
 
-  // ---------- Reference positions (original layout, scaled later) ----------
-  const torsoPos = [0, 1.05, 0];
-  const neckPos = [0, 2.355, 0];
-  const headPos = [0, 3.202, 0];
-  const hipPos = [0, -0.144, 0];
-  const shoulderY = 2.09;
-  const hipY = 0.375;
+  // ---------- Joint positions (new final size) ----------
+  const torsoPos: [number, number, number] = [0, 0.36, 0];
+  const neckPos: [number, number, number] = [0, 0.82, 0];
+  const headPos: [number, number, number] = [0, 1.11, 0];
+  const hipPos: [number, number, number] = [0, -0.05, 0];
 
-  // Arm pivots
-  const rightShoulderPos = [1.15, shoulderY, 0.04];
-  const leftShoulderPos = [-1.15, shoulderY, 0.04];
-  const rightElbowPos = [1.25, shoulderY - 1.25, 0.08];
-  const leftElbowPos = [-1.25, shoulderY - 1.25, 0.08];
+  const shoulderY = 0.73;
+  const rightShoulder: [number, number, number] = [0.4, shoulderY, 0.02];
+  const leftShoulder: [number, number, number] = [-0.4, shoulderY, 0.02];
 
-  // Leg pivots
-  const rightHipPos = [0.42, hipY, 0];
-  const leftHipPos = [-0.42, hipY, 0];
-  const rightKneePos = [0.44, hipY - 1.35, 0];
-  const leftKneePos = [-0.44, hipY - 1.35, 0];
+  const hipJointY = 0.13;
+  const rightHip: [number, number, number] = [0.145, hipJointY, 0];
+  const leftHip: [number, number, number] = [-0.145, hipJointY, 0];
 
-  //--------- Animation state ----------
+  // ---------- Animation state ----------
   const phase = useRef(0);
-  const lastVelocity = useRef(0);
+  const lastWalkSpeed = useRef(0);
 
   useFrame((_, delta) => {
-    if (!rag && swingSpeed > 0) {
-      // Increment phase based on speed, more natural stepping
-      const stepDelta = swingSpeed * delta * (isRunning ? 1.2 : 1);
+    if (!rag && walkSpeed > 0.1) {
+      // Phase advances with ground speed
+      const stepDelta = walkSpeed * delta * (isRunning ? 1.3 : 1.0);
       phase.current += stepDelta;
-      // Smooth transition when stopping / starting
-      if (moveAmount < 0.05 && lastVelocity.current > 0.1) phase.current = 0;
-      lastVelocity.current = moveAmount;
-    } else if (moveAmount < 0.05) {
+      lastWalkSpeed.current = walkSpeed;
+    } else if (walkSpeed < 0.05 && lastWalkSpeed.current > 0.1) {
+      // Reset phase when stopping to avoid twitching
       phase.current = 0;
+      lastWalkSpeed.current = 0;
     }
   });
 
-  // Helper to compute limb angles (radians)
-  const getArmAngles = (side: 'right' | 'left') => {
+  // Helper to get smooth gait value (sine with offset for left/right)
+  const gait = (offset: number, amplitude: number) => Math.sin(phase.current + offset) * amplitude;
+
+  // ---------- Limb orientation builders (used inside useFrame) ----------
+  const getArmRotation = (side: 'right' | 'left') => {
     const sign = side === 'right' ? 1 : -1;
-    const swing = Math.sin(phase.current) * intensity * 1.1;
-    // Elbow bend: bends when arm swings forward, straightens when back
-    const elbowBend = 0.4 + Math.sin(phase.current + Math.PI) * 0.35 * intensity;
-    // Slight lateral swing
-    const lateral = Math.sin(phase.current * 1.6) * 0.15 * intensity;
-    return {
-      shoulder: new THREE.Vector3(swing * sign, lateral, 0.1 * intensity),
-      elbow: new THREE.Vector3(elbowBend * -sign, 0, 0),
-    };
+    const forward = gait(0, armSwingRange) * sign;
+    const lateral = gait(Math.PI / 2, 0.12 * strideFactor) * sign;
+    const elbowFlex = Math.PI / 2 + Math.sin(phase.current + Math.PI / 2) * elbowBendFactor * 0.7;
+    return { shoulder: new THREE.Vector3(forward, lateral, 0.08), elbow: new THREE.Vector3(elbowFlex * sign, 0, 0) };
   };
 
-  const getLegAngles = (side: 'right' | 'left') => {
+  const getLegRotation = (side: 'right' | 'left') => {
     const sign = side === 'right' ? 1 : -1;
-    // Opposite phase to arms for natural walk
-    const legSwing = Math.sin(phase.current + Math.PI) * intensity * 0.9;
-    // Knee lift increases with speed, higher during swing phase
-    const kneeLift = 0.3 + Math.abs(Math.sin(phase.current + Math.PI)) * 0.45 * intensity;
-    // Slight abduction
-    const abduction = Math.sin(phase.current * 1.8) * 0.12 * intensity;
-    return {
-      hip: new THREE.Vector3(legSwing * sign, abduction, 0),
-      knee: new THREE.Vector3(-kneeLift * sign, 0, 0),
-    };
+    // Legs move opposite to arms
+    const forward = gait(Math.PI, legSwingRange) * sign;
+    const abduction = gait(Math.PI / 2, 0.08 * strideFactor) * sign;
+    // Knee bend – more when leg is swinging forward
+    const kneeBendRaw = Math.sin(phase.current + Math.PI) * kneeLiftFactor;
+    const kneeBend = Math.max(0.1, 0.4 + kneeBendRaw * 0.8);
+    // Ankle tilt for toe‑off
+    const ankleTilt = gait(0, 0.2 * strideFactor) * sign;
+    return { hip: new THREE.Vector3(forward, abduction, 0), knee: new THREE.Vector3(kneeBend * sign, 0, 0), ankle: ankleTilt };
   };
 
-  // Torso twist + head bob
-  const torsoTwist = Math.sin(phase.current) * 0.2 * intensity;
-  const headBobY = Math.abs(Math.sin(phase.current * 2)) * 0.04 * intensity;
+  // Torso twist and hip sway
+  const torsoTwist = gait(0, torsoTwistRange);
+  const hipSway = gait(Math.PI / 2, hipSwayRange);
+  const headBob = Math.abs(gait(0, headBobRange));
 
-  // ----- Component for articulated arms -----
-  const ArticulatedArm = ({
-    side,
-    shoulderPos,
-    elbowPos,
-    upperArmLength = 1.25,
-    lowerArmLength = 1.15,
-  }: {
-    side: 'right' | 'left';
-    shoulderPos: [number, number, number];
-    elbowPos: [number, number, number];
-    upperArmLength: number;
-    lowerArmLength: number;
-  }) => {
-    const groupRef = useRef<THREE.Group>(null);
-    const upperRef = useRef<THREE.Mesh>(null);
-    const lowerRef = useRef<THREE.Mesh>(null);
-    const handRef = useRef<THREE.Mesh>(null);
-
+  // ----- Articulated arm component (updates every frame) -----
+  const ArticulatedArm = ({ side, shoulderPos }: { side: 'right' | 'left'; shoulderPos: THREE.Vector3Tuple }) => {
+    const armGroup = useRef<THREE.Group>(null);
+    const lowerArmGroup = useRef<THREE.Group>(null);
     useFrame(() => {
-      if (groupRef.current && !rag) {
-        const { shoulder, elbow } = getArmAngles(side);
-        // Shoulder rotation (upper arm rotates from shoulder pivot)
-        groupRef.current.rotation.set(shoulder.x, shoulder.y, shoulder.z);
-        // Elbow rotation relative to upper arm
-        if (upperRef.current && lowerRef.current) {
-          lowerRef.current.rotation.set(elbow.x, elbow.y, elbow.z);
-        }
+      if (armGroup.current && !rag) {
+        const { shoulder, elbow } = getArmRotation(side);
+        armGroup.current.rotation.set(shoulder.x, shoulder.y, shoulder.z);
+        if (lowerArmGroup.current) lowerArmGroup.current.rotation.set(elbow.x, elbow.y, elbow.z);
       }
     });
-
-    // Position helper: elbow at local (0, -upperArmLength/2, 0) relative to shoulder group
     return (
-      <group ref={groupRef} position={shoulderPos}>
-        {/* Upper arm extends downward */}
-        <mesh ref={upperRef} geometry={upperArmGeo} material={bodyMaterial} position={[0, -upperArmLength / 2, 0]} castShadow />
-        {/* Elbow joint group: rotates for lower arm */}
-        <group position={[0, -upperArmLength, 0]}>
-          <mesh ref={lowerRef} geometry={lowerArmGeo} material={bodyMaterial} position={[0, -lowerArmLength / 2, 0]} castShadow />
-          {/* Hand attached at end of lower arm */}
-          <mesh ref={handRef} geometry={handGeo} material={bodyMaterial} position={[0.02, -lowerArmLength, 0.14]} castShadow />
+      <group ref={armGroup} position={shoulderPos}>
+        <mesh geometry={upperArmGeo} material={bodyMat} position={[0, -0.215, 0]} castShadow />
+        <group ref={lowerArmGroup} position={[0, -0.43, 0]}>
+          <mesh geometry={lowerArmGeo} material={bodyMat} position={[0, -0.195, 0]} castShadow />
+          <mesh geometry={handGeo} material={bodyMat} position={[0.01 * (side === 'right' ? 1 : -1), -0.39, 0.05]} castShadow />
         </group>
       </group>
     );
   };
 
-  // ----- Articulated Leg -----
-  const ArticulatedLeg = ({
-    side,
-    hipPos,
-    kneePos,
-    upperLegLength = 1.35,
-    lowerLegLength = 1.1,
-  }: {
-    side: 'right' | 'left';
-    hipPos: [number, number, number];
-    kneePos: [number, number, number];
-    upperLegLength: number;
-    lowerLegLength: number;
-  }) => {
-    const groupRef = useRef<THREE.Group>(null);
-    const upperRef = useRef<THREE.Mesh>(null);
-    const lowerRef = useRef<THREE.Mesh>(null);
-    const footRef = useRef<THREE.Mesh>(null);
-
+  // ----- Articulated leg component -----
+  const ArticulatedLeg = ({ side, hipPos }: { side: 'right' | 'left'; hipPos: THREE.Vector3Tuple }) => {
+    const legGroup = useRef<THREE.Group>(null);
+    const lowerLegGroup = useRef<THREE.Group>(null);
+    const footGroup = useRef<THREE.Group>(null);
     useFrame(() => {
-      if (groupRef.current && !rag) {
-        const { hip, knee } = getLegAngles(side);
-        groupRef.current.rotation.set(hip.x, hip.y, hip.z);
-        if (upperRef.current && lowerRef.current) {
-          lowerRef.current.rotation.set(knee.x, knee.y, knee.z);
-        }
+      if (legGroup.current && !rag) {
+        const { hip, knee, ankle } = getLegRotation(side);
+        legGroup.current.rotation.set(hip.x, hip.y, hip.z);
+        if (lowerLegGroup.current) lowerLegGroup.current.rotation.set(knee.x, knee.y, knee.z);
+        if (footGroup.current) footGroup.current.rotation.set(ankle, 0, 0);
       }
     });
-
     return (
-      <group ref={groupRef} position={hipPos}>
-        <mesh ref={upperRef} geometry={upperLegGeo} material={limbMaterial} position={[0, -upperLegLength / 2, 0]} castShadow />
-        <group position={[0, -upperLegLength, 0]}>
-          <mesh ref={lowerRef} geometry={lowerLegGeo} material={limbMaterial} position={[0, -lowerLegLength / 2, 0]} castShadow />
-          <mesh ref={footRef} geometry={footGeo} material={limbMaterial} position={[0, -lowerLegLength, 0.18]} castShadow />
+      <group ref={legGroup} position={hipPos}>
+        <mesh geometry={upperLegGeo} material={limbMat} position={[0, -0.235, 0]} castShadow />
+        <group ref={lowerLegGroup} position={[0, -0.47, 0]}>
+          <mesh geometry={lowerLegGeo} material={limbMat} position={[0, -0.19, 0]} castShadow />
+          <group ref={footGroup} position={[0, -0.38, 0]}>
+            <mesh geometry={footGeo} material={limbMat} position={[0, -0.07, 0.08]} castShadow />
+          </group>
         </group>
       </group>
     );
   };
-
-  // Scale factor (original to world)
-  const SCALE = 0.294;
 
   return (
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
       <group rotation={[0, player.rotation.y, 0]} scale={[player.size || 1, player.size || 1, player.size || 1]}>
-        <group scale={[SCALE, SCALE, SCALE]}>
-          {/* Torso with twist */}
-          <group rotation={rag ? undefined : [0, torsoTwist, 0]}>
-            <mesh geometry={torsoGeo} material={bodyMaterial} position={ragTorso || torsoPos} castShadow receiveShadow />
-          </group>
-
-          <mesh geometry={neckGeo} material={bodyMaterial} position={neckPos} castShadow />
-
-          {/* Head bob */}
-          <group position={ragHead || headPos}>
-            <mesh geometry={headGeo} material={headMaterial} position={[0, headBobY, 0]} castShadow />
-          </group>
-
-          <mesh geometry={hipGeo} material={bodyMaterial} position={hipPos} castShadow />
-
-          {/* Arms - replace old pivot groups with articulated versions */}
-          {!rag ? (
-            <>
-              <ArticulatedArm side="right" shoulderPos={rightShoulderPos} elbowPos={rightElbowPos} upperArmLength={1.25} lowerArmLength={1.15} />
-              <ArticulatedArm side="left" shoulderPos={leftShoulderPos} elbowPos={leftElbowPos} upperArmLength={1.25} lowerArmLength={1.15} />
-            </>
-          ) : (
-            // Ragdoll fallback: simple static limbs
-            <>
-              <group position={ragRightArm || rightShoulderPos}>
-                <mesh geometry={upperArmGeo} material={bodyMaterial} position={[0, -0.6, 0]} castShadow />
-                <mesh geometry={handGeo} material={bodyMaterial} position={[0.02, -1.8, 0.14]} castShadow />
-              </group>
-              <group position={ragLeftArm || leftShoulderPos}>
-                <mesh geometry={upperArmGeo} material={bodyMaterial} position={[0, -0.6, 0]} castShadow />
-                <mesh geometry={handGeo} material={bodyMaterial} position={[0.02, -1.8, 0.14]} castShadow />
-              </group>
-            </>
-          )}
-
-          {/* Legs - articulated */}
-          {!rag ? (
-            <>
-              <ArticulatedLeg side="right" hipPos={rightHipPos} kneePos={rightKneePos} upperLegLength={1.35} lowerLegLength={1.1} />
-              <ArticulatedLeg side="left" hipPos={leftHipPos} kneePos={leftKneePos} upperLegLength={1.35} lowerLegLength={1.1} />
-            </>
-          ) : (
-            // Ragdoll fallback
-            <>
-              <group position={ragRightLeg || rightHipPos}>
-                <mesh geometry={upperLegGeo} material={limbMaterial} position={[0, -0.68, 0]} castShadow />
-                <mesh geometry={footGeo} material={limbMaterial} position={[0, -1.8, 0.18]} castShadow />
-              </group>
-              <group position={ragLeftLeg || leftHipPos}>
-                <mesh geometry={upperLegGeo} material={limbMaterial} position={[0, -0.68, 0]} castShadow />
-                <mesh geometry={footGeo} material={limbMaterial} position={[0, -1.8, 0.18]} castShadow />
-              </group>
-            </>
-          )}
+        {/* Torso with twist and hip sway */}
+        <group rotation={rag ? undefined : [0, torsoTwist, 0]} position={ragTorso || [0, hipSway, 0]}>
+          <mesh geometry={torsoGeo} material={bodyMat} position={torsoPos} castShadow receiveShadow />
         </group>
+
+        {/* Neck and head with bob */}
+        <mesh geometry={neckGeo} material={bodyMat} position={neckPos} castShadow />
+        <group position={ragHead || headPos}>
+          <mesh geometry={headGeo} material={headMat} position={[0, headBob, 0]} castShadow />
+        </group>
+
+        {/* Hip piece (pelvis) */}
+        <mesh geometry={hipGeo} material={bodyMat} position={hipPos} castShadow />
+
+        {/* Arms */}
+        {!rag ? (
+          <>
+            <ArticulatedArm side="right" shoulderPos={rightShoulder} />
+            <ArticulatedArm side="left" shoulderPos={leftShoulder} />
+          </>
+        ) : (
+          // Ragdoll fallback: simple static limbs
+          <>
+            <group position={ragRightArm || rightShoulder}>
+              <mesh geometry={upperArmGeo} material={bodyMat} position={[0, -0.2, 0]} castShadow />
+              <mesh geometry={handGeo} material={bodyMat} position={[0.02, -0.6, 0.05]} castShadow />
+            </group>
+            <group position={ragLeftArm || leftShoulder}>
+              <mesh geometry={upperArmGeo} material={bodyMat} position={[0, -0.2, 0]} castShadow />
+              <mesh geometry={handGeo} material={bodyMat} position={[-0.02, -0.6, 0.05]} castShadow />
+            </group>
+          </>
+        )}
+
+        {/* Legs */}
+        {!rag ? (
+          <>
+            <ArticulatedLeg side="right" hipPos={rightHip} />
+            <ArticulatedLeg side="left" hipPos={leftHip} />
+          </>
+        ) : (
+          <>
+            <group position={ragRightLeg || rightHip}>
+              <mesh geometry={upperLegGeo} material={limbMat} position={[0, -0.235, 0]} castShadow />
+              <mesh geometry={footGeo} material={limbMat} position={[0, -0.62, 0.08]} castShadow />
+            </group>
+            <group position={ragLeftLeg || leftHip}>
+              <mesh geometry={upperLegGeo} material={limbMat} position={[0, -0.235, 0]} castShadow />
+              <mesh geometry={footGeo} material={limbMat} position={[0, -0.62, 0.08]} castShadow />
+            </group>
+          </>
+        )}
 
         {/* Name tag */}
         <Html position={[0, 1.25, 0]} center distanceFactor={8} zIndexRange={[100, 0]} sprite>
