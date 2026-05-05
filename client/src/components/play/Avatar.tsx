@@ -44,7 +44,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   // Torso dimensions – the rounded caps are seamlessly attached to the cylinder ends
   const torsoRadius = 0.32;
   const torsoHeight = 0.7;           // straight cylinder part height
-  const capHeight = 0.1;              // how much the cap protrudes (subtle rounding)
+  const capHeight = 0.135;            // how much the cap protrudes (slightly extended for better rounding)
   const torsoTotalYCenter = 0.05;     // keep same center as before
 
   return (
