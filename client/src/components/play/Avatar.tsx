@@ -12,8 +12,8 @@ import { GameRuntime, type RuntimePlayer } from "@/lib/gameRuntime";
  * limbs render at offsets read from `runtime._ragdollPos`.
  * 
  * The torso is a cylinder with slightly rounded top and bottom edges.
- * The rounding is achieved by flattened spheres that blend seamlessly into
- * the cylinder ends – no gaps, no z‑fighting.
+ * Shoulders are vertical capsules that bridge from the torso side to the arm,
+ * creating a seamless connection.
  */
 export default function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRuntime }) {
   const anim = player.motors.animation;
@@ -33,8 +33,11 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const rightShoulderPos = new THREE.Vector3(0.42, 0.38, 0);
   const leftShoulderPos = new THREE.Vector3(-0.42, 0.38, 0);
   
-  const defaultRightArmPos = new THREE.Vector3(0.42, 0.18, 0);
-  const defaultLeftArmPos = new THREE.Vector3(-0.42, 0.18, 0);
+  // The arm attaches 0.2 units below the shoulder sphere (vertical bridge)
+  const armOffsetFromShoulder = new THREE.Vector3(0, -0.2, 0);
+  const defaultRightArmPos = rightShoulderPos.clone().add(armOffsetFromShoulder);
+  const defaultLeftArmPos = leftShoulderPos.clone().add(armOffsetFromShoulder);
+  
   const rightArmLocalPos = defaultRightArmPos.clone().sub(rightShoulderPos);
   const leftArmLocalPos = defaultLeftArmPos.clone().sub(leftShoulderPos);
 
@@ -46,6 +49,12 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const torsoHeight = 0.7;           // straight cylinder part height
   const capHeight = 0.135;            // how much the cap protrudes (slightly extended for better rounding)
   const torsoTotalYCenter = 0.05;     // keep same center as before
+
+  // Bridge capsule dimensions – connects shoulder sphere position to arm top
+  const bridgeRadius = 0.11;
+  const bridgeHeight = 0.2; // distance from shoulder pos to arm start
+  const rightBridgeCenter = new THREE.Vector3(0.42, 0.28, 0);
+  const leftBridgeCenter = new THREE.Vector3(-0.42, 0.28, 0);
 
   return (
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
@@ -88,13 +97,17 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </mesh>
         )}
 
-        {/* RIGHT SHOULDER & ARM */}
+        {/* RIGHT SHOULDER – bridge capsule connecting torso to arm */}
+        {!rag && (
+          <mesh position={rightBridgeCenter} castShadow>
+            <capsuleGeometry args={[bridgeRadius, bridgeHeight, 8, 12]} />
+            <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+          </mesh>
+        )}
+
+        {/* RIGHT ARM */}
         {!rag ? (
           <group position={rightShoulderPos}>
-            <mesh castShadow>
-              <sphereGeometry args={[0.14, 16, 16]} />
-              <meshStandardMaterial color={player.color} roughness={0.5} />
-            </mesh>
             <group position={rightArmLocalPos} rotation={[swing, 0, 0.05]}>
               <mesh position={[0, -0.25, 0]} castShadow>
                 <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
@@ -119,13 +132,17 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </group>
         )}
 
-        {/* LEFT SHOULDER & ARM */}
+        {/* LEFT SHOULDER – bridge capsule connecting torso to arm */}
+        {!rag && (
+          <mesh position={leftBridgeCenter} castShadow>
+            <capsuleGeometry args={[bridgeRadius, bridgeHeight, 8, 12]} />
+            <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+          </mesh>
+        )}
+
+        {/* LEFT ARM */}
         {!rag ? (
           <group position={leftShoulderPos}>
-            <mesh castShadow>
-              <sphereGeometry args={[0.14, 16, 16]} />
-              <meshStandardMaterial color={player.color} roughness={0.5} />
-            </mesh>
             <group position={leftArmLocalPos} rotation={[-swing, 0, -0.05]}>
               <mesh position={[0, -0.25, 0]} castShadow>
                 <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
