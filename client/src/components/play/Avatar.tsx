@@ -38,11 +38,11 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const torsoTopRadius = 0.42;
   const torsoBottomRadius = 0.34;
   const torsoHeight = 0.75;
-  const torsoCenterY = 0.05; // centered a bit above origin
+  const torsoCenterY = 0.05;
 
   // Colors
   const skinColor = "#f5c6a0";
-  const shirtColor = player.color; // use player's color for shirt
+  const shirtColor = player.color;
   const pantsColor = "#2a3142";
   const shoeColor = "#4a2e1e";
 
@@ -50,33 +50,33 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
       <group rotation={[0, player.rotation.y, 0]} scale={[size, size, size]}>
         
-        {/* TORSO – tapered cylinder (chest wider, waist narrower) */}
+        {/* TORSO – tapered cylinder */}
         <group position={ragTorsoPos || [0, torsoCenterY, 0]}>
           <mesh castShadow receiveShadow>
             <cylinderGeometry args={[torsoTopRadius, torsoBottomRadius, torsoHeight, 16, 16]} />
             <meshStandardMaterial color={shirtColor} roughness={0.5} metalness={0.1} />
           </mesh>
           
-          {/* Simple chest line / belt suggestion */}
+          {/* Belt line */}
           <mesh position={[0, -0.2, torsoBottomRadius + 0.02]} rotation={[-Math.PI / 2, 0, 0]} castShadow>
             <torusGeometry args={[torsoBottomRadius + 0.02, 0.04, 8, 40]} />
             <meshStandardMaterial color="#1f2733" roughness={0.6} />
           </mesh>
           
           {/* Collar / neck base */}
-          <mesh position={[0, torsoHeight/2 - 0.05, 0]} castShadow>
+          <mesh position={[0, torsoHeight / 2 - 0.05, 0]} castShadow>
             <cylinderGeometry args={[0.28, 0.32, 0.08, 12]} />
             <meshStandardMaterial color={shirtColor} roughness={0.5} />
           </mesh>
         </group>
 
-        {/* PANTS (simple boxy shape) */}
+        {/* PANTS */}
         <mesh position={[0, -0.35, 0]} castShadow receiveShadow>
           <cylinderGeometry args={[0.36, 0.32, 0.25, 12]} />
           <meshStandardMaterial color={pantsColor} roughness={0.7} />
         </mesh>
 
-        {/* RIGHT ARM – with shoulder rounding and hand */}
+        {/* RIGHT ARM */}
         {!rag ? (
           <group position={rightShoulderPos}>
             <group position={rightArmLocalPos} rotation={[swing, 0, 0.15]}>
@@ -141,8 +141,11 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </group>
         )}
 
-        {/* LEGS – more human-like, with thighs and calves */}
-        <group position={rag && off("rightLeg") ? [off("rightLeg")!.x, off("rightLeg")!.y, off("rightLeg")!.z] : [0.22, -0.55, 0]} rotation={rag ? [0, 0, 0] : [-swing * 0.5, 0, 0]}>
+        {/* RIGHT LEG */}
+        <group
+          position={rag && off("rightLeg") ? [off("rightLeg")!.x, off("rightLeg")!.y, off("rightLeg")!.z] : [0.22, -0.55, 0]}
+          rotation={rag ? [0, 0, 0] : [-swing * 0.5, 0, 0]}
+        >
           <mesh position={[0, -0.2, 0]} castShadow>
             <capsuleGeometry args={[0.12, 0.45, 8, 12]} />
             <meshStandardMaterial color={pantsColor} roughness={0.7} />
@@ -158,7 +161,11 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </mesh>
         </group>
         
-        <group position={rag && off("leftLeg") ? [off("leftLeg")!.x, off("leftLeg")!.y, off("leftLeg")!.z] : [-0.22, -0.55, 0]} rotation={rag ? [0, 0, 0] : [swing * 0.5, 0, 0]}>
+        {/* LEFT LEG */}
+        <group
+          position={rag && off("leftLeg") ? [off("leftLeg")!.x, off("leftLeg")!.y, off("leftLeg")!.z] : [-0.22, -0.55, 0]}
+          rotation={rag ? [0, 0, 0] : [swing * 0.5, 0, 0]}
+        >
           <mesh position={[0, -0.2, 0]} castShadow>
             <capsuleGeometry args={[0.12, 0.45, 8, 12]} />
             <meshStandardMaterial color={pantsColor} roughness={0.7} />
@@ -173,19 +180,19 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </mesh>
         </group>
 
-        {/* HEAD – larger, cartoon proportions */}
+        {/* HEAD */}
         <mesh position={ragHeadPos || [0, 0.85, 0]} castShadow>
           <sphereGeometry args={[0.38, 32, 32]} />
           <meshStandardMaterial color={skinColor} roughness={0.25} />
         </mesh>
         
-        {/* HAIR – simple rounded hat/hair blob */}
+        {/* HAIR */}
         <mesh position={[0, 1.05, 0.05]} castShadow>
           <sphereGeometry args={[0.4, 24, 24, 0, Math.PI * 2, 0, Math.PI / 2.5]} />
           <meshStandardMaterial color="#2c1e0f" roughness={0.8} />
         </mesh>
 
-        {/* FACE – cartoon style, only when not ragdoll */}
+        {/* FACE – only when not ragdoll */}
         {!rag && (
           <>
             {/* Eye whites */}
@@ -215,12 +222,12 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
               <boxGeometry args={[0.12, 0.05, 0.05]} />
               <meshStandardMaterial color="#2c1e0f" />
             </mesh>
-            {/* Mouth (simple smile) */}
+            {/* Mouth */}
             <mesh position={[0, 0.78, 0.42]}>
               <torusGeometry args={[0.08, 0.02, 8, 20, Math.PI]} />
               <meshStandardMaterial color="#884422" />
             </mesh>
-            {/* Nose (tiny sphere) */}
+            {/* Nose */}
             <mesh position={[0, 0.87, 0.48]}>
               <sphereGeometry args={[0.05, 12, 12]} />
               <meshStandardMaterial color="#e0a878" />
@@ -228,7 +235,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </>
         )}
 
-        {/* NAME TAG (always visible) */}
+        {/* NAME TAG */}
         <Html position={[0, 1.4, 0]} center distanceFactor={8} zIndexRange={[100, 0]} sprite>
           <div className="px-2 py-0.5 rounded-md bg-black/70 text-white text-xs font-medium whitespace-nowrap pointer-events-none backdrop-blur-sm">
             {player.username}
