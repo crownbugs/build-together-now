@@ -12,8 +12,8 @@ import { GameRuntime, type RuntimePlayer } from "@/lib/gameRuntime";
  * limbs render at offsets read from `runtime._ragdollPos`.
  * 
  * The torso is a cylinder with slightly rounded top and bottom edges.
- * Shoulders are curved tubes that start at the torso side and curve outward
- * and down into the arm, creating a natural shoulder contour.
+ * Shoulders are curved tubes that start at the torso side and curve
+ * naturally into the arm – no overshoot, no overlapping.
  */
 export default function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRuntime }) {
   const anim = player.motors.animation;
@@ -29,58 +29,53 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const rag = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const off = (k: string) => (rag && rag[k] ? rag[k] : null);
 
-  // Shoulder curve attachment points (torso-relative)
-  const torsoSidePos = new THREE.Vector3(0.32, 0.33, 0);    // where curve starts on torso
-  const rightArmTop = new THREE.Vector3(0.42, 0.18, 0);     // where arm attaches
+  // Shoulder curve attachment points
+  const torsoRightStart = new THREE.Vector3(0.32, 0.33, 0);
+  const torsoLeftStart = new THREE.Vector3(-0.32, 0.33, 0);
+  const rightArmTop = new THREE.Vector3(0.42, 0.18, 0);
   const leftArmTop = new THREE.Vector3(-0.42, 0.18, 0);
   
-  // Control points for quadratic bezier – bulge outward
-  const rightCtrl = new THREE.Vector3(0.58, 0.33, 0);
-  const leftCtrl = new THREE.Vector3(-0.58, 0.33, 0);
+  // Control points for smooth bezier – bulges slightly outward but never goes past the arm
+  const rightCtrl = new THREE.Vector3(0.50, 0.28, 0);
+  const leftCtrl = new THREE.Vector3(-0.50, 0.28, 0);
 
-  // Arm default positions match the curve end points
   const defaultRightArmPos = rightArmTop;
   const defaultLeftArmPos = leftArmTop;
   
-  // Shoulder joint positions (for arm rotation pivot)
   const rightShoulderPos = new THREE.Vector3(0.42, 0.38, 0);
   const leftShoulderPos = new THREE.Vector3(-0.42, 0.38, 0);
-  
   const rightArmLocalPos = defaultRightArmPos.clone().sub(rightShoulderPos);
   const leftArmLocalPos = defaultLeftArmPos.clone().sub(leftShoulderPos);
 
   const ragRightArmPos = off("rightArm") ? new THREE.Vector3(off("rightArm")!.x, off("rightArm")!.y, off("rightArm")!.z) : null;
   const ragLeftArmPos = off("leftArm") ? new THREE.Vector3(off("leftArm")!.x, off("leftArm")!.y, off("leftArm")!.z) : null;
 
-  // Torso dimensions
   const torsoRadius = 0.32;
   const torsoHeight = 0.7;
   const capHeight = 0.135;
   const torsoTotalYCenter = 0.05;
 
-  // Helper to create a curved tube along a quadratic bezier curve
-  const createCurvedShoulder = (start: THREE.Vector3, control: THREE.Vector3, end: THREE.Vector3, radius: number) => {
+  // Helper to create a curved tube along a quadratic bezier
+  const createCurvedShoulder = (start: THREE.Vector3, control: THREE.Vector3, end: THREE.Vector3) => {
     const curve = new THREE.QuadraticBezierCurve3(start, control, end);
-    const tubeGeometry = new THREE.TubeGeometry(curve, 20, radius, 8, false);
-    return <mesh geometry={tubeGeometry} castShadow receiveShadow />;
+    const tubeGeometry = new THREE.TubeGeometry(curve, 20, 0.11, 8, false);
+    return <mesh geometry={tubeGeometry} castShadow receiveShadow material={new THREE.MeshStandardMaterial({ color: player.color, roughness: 0.55, metalness: 0.05 })} />;
   };
 
   return (
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
       <group rotation={[0, player.rotation.y, 0]} scale={[size, size, size]}>
         
-        {/* TORSO – cylinder with integrated rounded ends */}
+        {/* TORSO */}
         <group position={off("torso") ? [off("torso")!.x, off("torso")!.y, off("torso")!.z] : [0, torsoTotalYCenter, 0]}>
           <mesh castShadow position={[0, 0, 0]}>
             <cylinderGeometry args={[torsoRadius, torsoRadius, torsoHeight, 24, 16]} />
             <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
           </mesh>
-          
           <mesh castShadow position={[0, torsoHeight / 2, 0]} scale={[1, capHeight / torsoRadius, 1]}>
             <sphereGeometry args={[torsoRadius, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2]} />
             <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
           </mesh>
-          
           <mesh castShadow position={[0, -torsoHeight / 2, 0]} scale={[1, capHeight / torsoRadius, 1]}>
             <sphereGeometry args={[torsoRadius, 24, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2]} />
             <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
@@ -95,8 +90,8 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </mesh>
         )}
 
-        {/* CURVED RIGHT SHOULDER (bridge from torso to arm) */}
-        {!rag && createCurvedShoulder(torsoSidePos, rightCtrl, rightArmTop, 0.1)}
+        {/* CURVED RIGHT SHOULDER */}
+        {!rag && createCurvedShoulder(torsoRightStart, rightCtrl, rightArmTop)}
 
         {/* RIGHT ARM */}
         {!rag ? (
@@ -126,12 +121,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
         )}
 
         {/* CURVED LEFT SHOULDER */}
-        {!rag && createCurvedShoulder(
-          new THREE.Vector3(-torsoSidePos.x, torsoSidePos.y, torsoSidePos.z), 
-          leftCtrl, 
-          leftArmTop, 
-          0.1
-        )}
+        {!rag && createCurvedShoulder(torsoLeftStart, leftCtrl, leftArmTop)}
 
         {/* LEFT ARM */}
         {!rag ? (
