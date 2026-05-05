@@ -186,6 +186,22 @@ export class GameRuntime {
   gui = new Map<string, GuiElement>();
   guiVersion = 0;
   runService!: RunServiceAPI;
+  /** Scriptable camera config — read by ChaseCameraRig each frame. */
+  camera: import("./types").RuntimeCamera = {
+    mode: "thirdPerson",
+    distance: 6,
+    minDistance: 2,
+    maxDistance: 20,
+    offset: { x: 0, y: 0.7, z: 0 },
+    sensitivity: 1,
+    lockYaw: false,
+    lockPitch: false,
+    position: { x: 0, y: 4, z: 8 },
+    lookAt: { x: 0, y: 0, z: 0 },
+    fov: 60,
+  };
+  /** Per-slot motor state (which RuntimeObject to pin to the player rig). */
+  motorState = new Map<string, { obj: RuntimeObject; offset: Vec3; rotation: Vec3 }>();
 
   private tagManager = new TagManager();
   private taskScheduler = new TaskScheduler();
