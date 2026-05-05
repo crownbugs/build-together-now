@@ -2,6 +2,10 @@ import { Html } from "@react-three/drei";
 import * as THREE from "three";
 import { GameRuntime, type RuntimePlayer } from "@/lib/gameRuntime";
 
+/**
+ * Cartoon human avatar.
+ * Torso tapers slightly, arms attach at rounded shoulders, head has cartoon features.
+ */
 export default function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRuntime }) {
   const anim = player.motors.animation;
   const horiz = Math.hypot(player.velocity.x, player.velocity.z);
@@ -16,196 +20,217 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const rag = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const off = (k: string) => (rag && rag[k] ? rag[k] : null);
 
-  // Shoulder L‑shape points
-  const torsoRightSide = new THREE.Vector3(0.32, 0.33, 0);
-  const shoulderCorner = new THREE.Vector3(0.42, 0.33, 0);
-  const rightArmTop = new THREE.Vector3(0.42, 0.18, 0);
-  
-  const torsoLeftSide = new THREE.Vector3(-0.32, 0.33, 0);
-  const leftShoulderCorner = new THREE.Vector3(-0.42, 0.33, 0);
-  const leftArmTop = new THREE.Vector3(-0.42, 0.18, 0);
-
-  const defaultRightArmPos = rightArmTop;
-  const defaultLeftArmPos = leftArmTop;
-  
-  const rightShoulderPos = new THREE.Vector3(0.42, 0.38, 0);
-  const leftShoulderPos = new THREE.Vector3(-0.42, 0.38, 0);
+  // Shoulder joint positions (where arms pivot)
+  const rightShoulderPos = new THREE.Vector3(0.48, 0.48, 0);
+  const leftShoulderPos = new THREE.Vector3(-0.48, 0.48, 0);
+  // Arm default positions (hand area for reference, but arm is built as a group)
+  const defaultRightArmPos = new THREE.Vector3(0.48, 0.18, 0);
+  const defaultLeftArmPos = new THREE.Vector3(-0.48, 0.18, 0);
   const rightArmLocalPos = defaultRightArmPos.clone().sub(rightShoulderPos);
   const leftArmLocalPos = defaultLeftArmPos.clone().sub(leftShoulderPos);
 
   const ragRightArmPos = off("rightArm") ? new THREE.Vector3(off("rightArm")!.x, off("rightArm")!.y, off("rightArm")!.z) : null;
   const ragLeftArmPos = off("leftArm") ? new THREE.Vector3(off("leftArm")!.x, off("leftArm")!.y, off("leftArm")!.z) : null;
+  const ragHeadPos = off("head") ? new THREE.Vector3(off("head")!.x, off("head")!.y, off("head")!.z) : null;
+  const ragTorsoPos = off("torso") ? new THREE.Vector3(off("torso")!.x, off("torso")!.y, off("torso")!.z) : null;
 
-  const torsoRadius = 0.32;
-  const torsoHeight = 0.7;
-  const capHeight = 0.135;
-  const torsoTotalYCenter = 0.05;
+  // Torso dimensions (tapered: wider at top, narrower at waist)
+  const torsoTopRadius = 0.42;
+  const torsoBottomRadius = 0.34;
+  const torsoHeight = 0.75;
+  const torsoCenterY = 0.05; // centered a bit above origin
 
-  const createCylBetween = (p1: THREE.Vector3, p2: THREE.Vector3, radius: number, material: THREE.Material) => {
-    const start = new THREE.Vector3(p1.x, p1.y, p1.z);
-    const end = new THREE.Vector3(p2.x, p2.y, p2.z);
-    const dir = new THREE.Vector3().subVectors(end, start);
-    const length = dir.length();
-    const center = start.clone().add(dir.clone().multiplyScalar(0.5));
-    const quaternion = new THREE.Quaternion().setFromUnitVectors(
-      new THREE.Vector3(0, 1, 0),
-      dir.clone().normalize()
-    );
-    const geometry = new THREE.CylinderGeometry(radius, radius, length, 8);
-    return <mesh geometry={geometry} position={center} quaternion={quaternion} material={material} castShadow receiveShadow />;
-  };
-
-  const shoulderMaterial = new THREE.MeshStandardMaterial({ color: player.color, roughness: 0.55, metalness: 0.05 });
+  // Colors
+  const skinColor = "#f5c6a0";
+  const shirtColor = player.color; // use player's color for shirt
+  const pantsColor = "#2a3142";
+  const shoeColor = "#4a2e1e";
 
   return (
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
       <group rotation={[0, player.rotation.y, 0]} scale={[size, size, size]}>
         
-        {/* TORSO */}
-        <group position={off("torso") ? [off("torso")!.x, off("torso")!.y, off("torso")!.z] : [0, torsoTotalYCenter, 0]}>
-          <mesh castShadow position={[0, 0, 0]}>
-            <cylinderGeometry args={[torsoRadius, torsoRadius, torsoHeight, 24, 16]} />
-            <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+        {/* TORSO – tapered cylinder (chest wider, waist narrower) */}
+        <group position={ragTorsoPos || [0, torsoCenterY, 0]}>
+          <mesh castShadow receiveShadow>
+            <cylinderGeometry args={[torsoTopRadius, torsoBottomRadius, torsoHeight, 16, 16]} />
+            <meshStandardMaterial color={shirtColor} roughness={0.5} metalness={0.1} />
           </mesh>
-          <mesh castShadow position={[0, torsoHeight / 2, 0]} scale={[1, capHeight / torsoRadius, 1]}>
-            <sphereGeometry args={[torsoRadius, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2]} />
-            <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+          
+          {/* Simple chest line / belt suggestion */}
+          <mesh position={[0, -0.2, torsoBottomRadius + 0.02]} rotation={[-Math.PI / 2, 0, 0]} castShadow>
+            <torusGeometry args={[torsoBottomRadius + 0.02, 0.04, 8, 40]} />
+            <meshStandardMaterial color="#1f2733" roughness={0.6} />
           </mesh>
-          <mesh castShadow position={[0, -torsoHeight / 2, 0]} scale={[1, capHeight / torsoRadius, 1]}>
-            <sphereGeometry args={[torsoRadius, 24, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2]} />
-            <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
+          
+          {/* Collar / neck base */}
+          <mesh position={[0, torsoHeight/2 - 0.05, 0]} castShadow>
+            <cylinderGeometry args={[0.28, 0.32, 0.08, 12]} />
+            <meshStandardMaterial color={shirtColor} roughness={0.5} />
           </mesh>
         </group>
 
-        {/* BELT */}
-        {!rag && (
-          <mesh position={[0, -0.18, 0]} castShadow>
-            <cylinderGeometry args={[0.34, 0.34, 0.08, 24]} />
-            <meshStandardMaterial color="#1f2733" roughness={0.7} />
-          </mesh>
-        )}
+        {/* PANTS (simple boxy shape) */}
+        <mesh position={[0, -0.35, 0]} castShadow receiveShadow>
+          <cylinderGeometry args={[0.36, 0.32, 0.25, 12]} />
+          <meshStandardMaterial color={pantsColor} roughness={0.7} />
+        </mesh>
 
-        {/* RIGHT SHOULDER – horizontal + vertical + corner sphere (radius = cylinder radius) */}
-        {!rag && (
-          <>
-            {createCylBetween(torsoRightSide, shoulderCorner, 0.11, shoulderMaterial)}
-            {createCylBetween(shoulderCorner, rightArmTop, 0.11, shoulderMaterial)}
-            <mesh position={shoulderCorner} castShadow receiveShadow>
-              <sphereGeometry args={[0.11, 16, 16]} />
-              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
-            </mesh>
-          </>
-        )}
-
-        {/* RIGHT ARM */}
+        {/* RIGHT ARM – with shoulder rounding and hand */}
         {!rag ? (
           <group position={rightShoulderPos}>
-            <group position={rightArmLocalPos} rotation={[swing, 0, 0.05]}>
-              <mesh position={[0, -0.25, 0]} castShadow>
-                <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
-                <meshStandardMaterial color={player.color} roughness={0.6} />
+            <group position={rightArmLocalPos} rotation={[swing, 0, 0.15]}>
+              {/* Upper arm */}
+              <mesh position={[0, -0.22, 0]} castShadow>
+                <capsuleGeometry args={[0.11, 0.4, 8, 12]} />
+                <meshStandardMaterial color={shirtColor} roughness={0.6} />
               </mesh>
-              <mesh position={[0, -0.55, 0]} castShadow>
-                <sphereGeometry args={[0.11, 16, 16]} />
-                <meshStandardMaterial color="#7a3e19" roughness={0.7} />
+              {/* Forearm */}
+              <mesh position={[0, -0.48, 0]} castShadow>
+                <capsuleGeometry args={[0.09, 0.35, 8, 12]} />
+                <meshStandardMaterial color={shirtColor} roughness={0.6} />
+              </mesh>
+              {/* Hand */}
+              <mesh position={[0, -0.68, 0]} castShadow>
+                <sphereGeometry args={[0.09, 8, 8]} />
+                <meshStandardMaterial color={skinColor} roughness={0.3} />
               </mesh>
             </group>
           </group>
         ) : (
           <group position={ragRightArmPos || defaultRightArmPos} rotation={[0, 0, 0]}>
-            <mesh position={[0, -0.25, 0]} castShadow>
-              <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
-              <meshStandardMaterial color={player.color} roughness={0.6} />
+            <mesh position={[0, -0.22, 0]} castShadow>
+              <capsuleGeometry args={[0.11, 0.4, 8, 12]} />
+              <meshStandardMaterial color={shirtColor} roughness={0.6} />
             </mesh>
-            <mesh position={[0, -0.55, 0]} castShadow>
-              <sphereGeometry args={[0.11, 16, 16]} />
-              <meshStandardMaterial color="#7a3e19" roughness={0.7} />
+            <mesh position={[0, -0.68, 0]} castShadow>
+              <sphereGeometry args={[0.09, 8, 8]} />
+              <meshStandardMaterial color={skinColor} roughness={0.3} />
             </mesh>
           </group>
-        )}
-
-        {/* LEFT SHOULDER – mirrored */}
-        {!rag && (
-          <>
-            {createCylBetween(torsoLeftSide, leftShoulderCorner, 0.11, shoulderMaterial)}
-            {createCylBetween(leftShoulderCorner, leftArmTop, 0.11, shoulderMaterial)}
-            <mesh position={leftShoulderCorner} castShadow receiveShadow>
-              <sphereGeometry args={[0.11, 16, 16]} />
-              <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
-            </mesh>
-          </>
         )}
 
         {/* LEFT ARM */}
         {!rag ? (
           <group position={leftShoulderPos}>
-            <group position={leftArmLocalPos} rotation={[-swing, 0, -0.05]}>
-              <mesh position={[0, -0.25, 0]} castShadow>
-                <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
-                <meshStandardMaterial color={player.color} roughness={0.6} />
+            <group position={leftArmLocalPos} rotation={[-swing, 0, -0.15]}>
+              <mesh position={[0, -0.22, 0]} castShadow>
+                <capsuleGeometry args={[0.11, 0.4, 8, 12]} />
+                <meshStandardMaterial color={shirtColor} roughness={0.6} />
               </mesh>
-              <mesh position={[0, -0.55, 0]} castShadow>
-                <sphereGeometry args={[0.11, 16, 16]} />
-                <meshStandardMaterial color="#7a3e19" roughness={0.7} />
+              <mesh position={[0, -0.48, 0]} castShadow>
+                <capsuleGeometry args={[0.09, 0.35, 8, 12]} />
+                <meshStandardMaterial color={shirtColor} roughness={0.6} />
+              </mesh>
+              <mesh position={[0, -0.68, 0]} castShadow>
+                <sphereGeometry args={[0.09, 8, 8]} />
+                <meshStandardMaterial color={skinColor} roughness={0.3} />
               </mesh>
             </group>
           </group>
         ) : (
           <group position={ragLeftArmPos || defaultLeftArmPos} rotation={[0, 0, 0]}>
-            <mesh position={[0, -0.25, 0]} castShadow>
-              <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
-              <meshStandardMaterial color={player.color} roughness={0.6} />
+            <mesh position={[0, -0.22, 0]} castShadow>
+              <capsuleGeometry args={[0.11, 0.4, 8, 12]} />
+              <meshStandardMaterial color={shirtColor} roughness={0.6} />
             </mesh>
-            <mesh position={[0, -0.55, 0]} castShadow>
-              <sphereGeometry args={[0.11, 16, 16]} />
-              <meshStandardMaterial color="#7a3e19" roughness={0.7} />
+            <mesh position={[0, -0.68, 0]} castShadow>
+              <sphereGeometry args={[0.09, 8, 8]} />
+              <meshStandardMaterial color={skinColor} roughness={0.3} />
             </mesh>
           </group>
         )}
 
-        {/* LEGS (unchanged) */}
-        <group position={off("rightLeg") ? [off("rightLeg")!.x, off("rightLeg")!.y, off("rightLeg")!.z] : [0.18, -0.45, 0]} rotation={rag ? [0, 0, 0] : [-swing, 0, 0]}>
-          <mesh position={[0, -0.18, 0]} castShadow>
-            <capsuleGeometry args={[0.13, 0.34, 6, 12]} />
-            <meshStandardMaterial color="#2a3142" roughness={0.7} />
+        {/* LEGS – more human-like, with thighs and calves */}
+        <group position={rag && off("rightLeg") ? [off("rightLeg")!.x, off("rightLeg")!.y, off("rightLeg")!.z] : [0.22, -0.55, 0]} rotation={rag ? [0, 0, 0] : [-swing * 0.5, 0, 0]}>
+          <mesh position={[0, -0.2, 0]} castShadow>
+            <capsuleGeometry args={[0.12, 0.45, 8, 12]} />
+            <meshStandardMaterial color={pantsColor} roughness={0.7} />
+          </mesh>
+          <mesh position={[0, -0.52, 0]} castShadow>
+            <capsuleGeometry args={[0.1, 0.35, 8, 12]} />
+            <meshStandardMaterial color={pantsColor} roughness={0.7} />
+          </mesh>
+          {/* Shoe */}
+          <mesh position={[0, -0.75, 0.05]} castShadow>
+            <boxGeometry args={[0.22, 0.12, 0.28]} />
+            <meshStandardMaterial color={shoeColor} roughness={0.8} />
           </mesh>
         </group>
-        <group position={off("leftLeg") ? [off("leftLeg")!.x, off("leftLeg")!.y, off("leftLeg")!.z] : [-0.18, -0.45, 0]} rotation={rag ? [0, 0, 0] : [swing, 0, 0]}>
-          <mesh position={[0, -0.18, 0]} castShadow>
-            <capsuleGeometry args={[0.13, 0.34, 6, 12]} />
-            <meshStandardMaterial color="#2a3142" roughness={0.7} />
+        
+        <group position={rag && off("leftLeg") ? [off("leftLeg")!.x, off("leftLeg")!.y, off("leftLeg")!.z] : [-0.22, -0.55, 0]} rotation={rag ? [0, 0, 0] : [swing * 0.5, 0, 0]}>
+          <mesh position={[0, -0.2, 0]} castShadow>
+            <capsuleGeometry args={[0.12, 0.45, 8, 12]} />
+            <meshStandardMaterial color={pantsColor} roughness={0.7} />
+          </mesh>
+          <mesh position={[0, -0.52, 0]} castShadow>
+            <capsuleGeometry args={[0.1, 0.35, 8, 12]} />
+            <meshStandardMaterial color={pantsColor} roughness={0.7} />
+          </mesh>
+          <mesh position={[0, -0.75, 0.05]} castShadow>
+            <boxGeometry args={[0.22, 0.12, 0.28]} />
+            <meshStandardMaterial color={shoeColor} roughness={0.8} />
           </mesh>
         </group>
 
-        {/* HEAD & FACE (unchanged) */}
-        <mesh position={off("head") ? [off("head")!.x, off("head")!.y, off("head")!.z] : [0, 0.7, 0]} castShadow>
-          <sphereGeometry args={[0.3, 24, 24]} />
-          <meshStandardMaterial color="#7a3e19" roughness={0.6} />
+        {/* HEAD – larger, cartoon proportions */}
+        <mesh position={ragHeadPos || [0, 0.85, 0]} castShadow>
+          <sphereGeometry args={[0.38, 32, 32]} />
+          <meshStandardMaterial color={skinColor} roughness={0.25} />
         </mesh>
+        
+        {/* HAIR – simple rounded hat/hair blob */}
+        <mesh position={[0, 1.05, 0.05]} castShadow>
+          <sphereGeometry args={[0.4, 24, 24, 0, Math.PI * 2, 0, Math.PI / 2.5]} />
+          <meshStandardMaterial color="#2c1e0f" roughness={0.8} />
+        </mesh>
+
+        {/* FACE – cartoon style, only when not ragdoll */}
         {!rag && (
           <>
-            <mesh position={[0, 0.86, -0.02]} castShadow>
-              <sphereGeometry args={[0.31, 24, 24, 0, Math.PI * 2, 0, Math.PI / 2]} />
-              <meshStandardMaterial color="#000000" roughness={0.85} />
+            {/* Eye whites */}
+            <mesh position={[0.14, 0.92, 0.36]}>
+              <sphereGeometry args={[0.07, 24, 24]} />
+              <meshStandardMaterial color="#ffffff" />
             </mesh>
-            <mesh position={[0.1, 0.72, 0.27]}>
-              <sphereGeometry args={[0.045, 12, 12]} />
-              <meshBasicMaterial color="#0a0a0a" />
+            <mesh position={[-0.14, 0.92, 0.36]}>
+              <sphereGeometry args={[0.07, 24, 24]} />
+              <meshStandardMaterial color="#ffffff" />
             </mesh>
-            <mesh position={[-0.1, 0.72, 0.27]}>
-              <sphereGeometry args={[0.045, 12, 12]} />
-              <meshBasicMaterial color="#0a0a0a" />
+            {/* Pupils */}
+            <mesh position={[0.16, 0.91, 0.43]}>
+              <sphereGeometry args={[0.04, 16, 16]} />
+              <meshStandardMaterial color="#000000" />
             </mesh>
-            <mesh position={[0, 0.6, 0.28]}>
-              <torusGeometry args={[0.07, 0.012, 8, 16, Math.PI]} />
-              <meshBasicMaterial color="#252525" />
+            <mesh position={[-0.12, 0.91, 0.43]}>
+              <sphereGeometry args={[0.04, 16, 16]} />
+              <meshStandardMaterial color="#000000" />
+            </mesh>
+            {/* Eyebrows */}
+            <mesh position={[0.14, 1.0, 0.38]}>
+              <boxGeometry args={[0.12, 0.05, 0.05]} />
+              <meshStandardMaterial color="#2c1e0f" />
+            </mesh>
+            <mesh position={[-0.14, 1.0, 0.38]}>
+              <boxGeometry args={[0.12, 0.05, 0.05]} />
+              <meshStandardMaterial color="#2c1e0f" />
+            </mesh>
+            {/* Mouth (simple smile) */}
+            <mesh position={[0, 0.78, 0.42]}>
+              <torusGeometry args={[0.08, 0.02, 8, 20, Math.PI]} />
+              <meshStandardMaterial color="#884422" />
+            </mesh>
+            {/* Nose (tiny sphere) */}
+            <mesh position={[0, 0.87, 0.48]}>
+              <sphereGeometry args={[0.05, 12, 12]} />
+              <meshStandardMaterial color="#e0a878" />
             </mesh>
           </>
         )}
 
-        {/* NAME TAG */}
-        <Html position={[0, 1.25, 0]} center distanceFactor={8} zIndexRange={[100, 0]} sprite>
-          <div className="px-2 py-0.5 rounded-md bg-black/70 text-white text-xs font-medium whitespace-nowrap pointer-events-none">
+        {/* NAME TAG (always visible) */}
+        <Html position={[0, 1.4, 0]} center distanceFactor={8} zIndexRange={[100, 0]} sprite>
+          <div className="px-2 py-0.5 rounded-md bg-black/70 text-white text-xs font-medium whitespace-nowrap pointer-events-none backdrop-blur-sm">
             {player.username}
           </div>
         </Html>
