@@ -2,6 +2,17 @@ import { Html } from "@react-three/drei";
 import * as THREE from "three";
 import { GameRuntime, type RuntimePlayer } from "@/lib/gameRuntime";
 
+/**
+ * 3rd-person character mesh. Orientation is built from the player's "up"
+ * vector (so feet point at gravity) plus a Y rotation managed by the
+ * runtime's autoFaceMovement / script logic.
+ *
+ * Walk/run animation cycles are driven by `player.motors.animation` so
+ * scripts can override (e.g. set "shoot", "wave"). When the player ragdolls,
+ * limbs render at offsets read from `runtime._ragdollPos`.
+ *
+ * Torso: cylinder + caps (FIXED so caps visually fuse, no floating seam)
+ */
 export default function Avatar({
   player,
   runtime,
@@ -11,7 +22,6 @@ export default function Avatar({
 }) {
   const anim = player.motors.animation;
   const horiz = Math.hypot(player.velocity.x, player.velocity.z);
-
   const moveAmount = Math.min(
     1,
     horiz / Math.max(1, player.runSpeed || player.speed)
@@ -30,6 +40,28 @@ export default function Avatar({
   const rag = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const off = (k: string) => (rag && rag[k] ? rag[k] : null);
 
+  const rightShoulderPos = new THREE.Vector3(0.42, 0.38, 0);
+  const leftShoulderPos = new THREE.Vector3(-0.42, 0.38, 0);
+
+  const defaultRightArmPos = new THREE.Vector3(0.42, 0.18, 0);
+  const defaultLeftArmPos = new THREE.Vector3(-0.42, 0.18, 0);
+
+  const rightArmLocalPos = defaultRightArmPos.clone().sub(rightShoulderPos);
+  const leftArmLocalPos = defaultLeftArmPos.clone().sub(leftShoulderPos);
+
+  const ragRightArmPos = off("rightArm")
+    ? new THREE.Vector3(off("rightArm")!.x, off("rightArm")!.y, off("rightArm")!.z)
+    : null;
+
+  const ragLeftArmPos = off("leftArm")
+    ? new THREE.Vector3(off("leftArm")!.x, off("leftArm")!.y, off("leftArm")!.z)
+    : null;
+
+  const torsoRadius = 0.32;
+  const torsoHeight = 0.7;
+  const capHeight = 0.12;
+  const torsoTotalYCenter = 0.05;
+
   return (
     <group
       position={[player.position.x, player.position.y, player.position.z]}
@@ -37,16 +69,17 @@ export default function Avatar({
     >
       <group rotation={[0, player.rotation.y, 0]} scale={[size, size, size]}>
 
-        {/* 🟡 MAIN BODY (capsule base) */}
+        {/* 🟡 TORSO (FIXED CAPS — no floating seam) */}
         <group
           position={
             off("torso")
               ? [off("torso")!.x, off("torso")!.y, off("torso")!.z]
-              : [0, 0.05, 0]
+              : [0, torsoTotalYCenter, 0]
           }
         >
+          {/* cylinder body */}
           <mesh castShadow>
-            <capsuleGeometry args={[0.34, 0.7, 16, 32]} />
+            <cylinderGeometry args={[torsoRadius, torsoRadius, torsoHeight, 32]} />
             <meshStandardMaterial
               color={player.color}
               roughness={0.55}
@@ -54,9 +87,25 @@ export default function Avatar({
             />
           </mesh>
 
-          {/* 🟣 HIP BLEND (THIS fixes diaper look) */}
-          <mesh position={[0, -0.28, 0]} castShadow>
-            <sphereGeometry args={[0.43, 24, 24]} />
+          {/* TOP CAP (slightly overlapping into cylinder) */}
+          <mesh
+            castShadow
+            position={[0, torsoHeight / 2 - 0.03, 0]} // 👈 overlap fix
+          >
+            <sphereGeometry args={[torsoRadius * 1.01, 32, 24]} />
+            <meshStandardMaterial
+              color={player.color}
+              roughness={0.55}
+              metalness={0.05}
+            />
+          </mesh>
+
+          {/* BOTTOM CAP (slightly overlapping into cylinder) */}
+          <mesh
+            castShadow
+            position={[0, -torsoHeight / 2 + 0.03, 0]} // 👈 overlap fix
+          >
+            <sphereGeometry args={[torsoRadius * 1.01, 32, 24]} />
             <meshStandardMaterial
               color={player.color}
               roughness={0.55}
@@ -74,78 +123,68 @@ export default function Avatar({
         )}
 
         {/* RIGHT ARM */}
-        <group
-          position={
-            off("rightArm")
-              ? [off("rightArm")!.x, off("rightArm")!.y, off("rightArm")!.z]
-              : [0.42, 0.18, 0]
-          }
-          rotation={rag ? [0, 0, 0] : [swing, 0, 0.05]}
-        >
-          <mesh position={[0, -0.25, 0]} castShadow>
-            <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
-            <meshStandardMaterial color={player.color} roughness={0.6} />
-          </mesh>
-          <mesh position={[0, -0.55, 0]} castShadow>
-            <sphereGeometry args={[0.11, 16, 16]} />
-            <meshStandardMaterial color="#7a3e19" roughness={0.7} />
-          </mesh>
-        </group>
+        {!rag ? (
+          <group position={rightShoulderPos}>
+            <mesh castShadow>
+              <sphereGeometry args={[0.14, 16, 16]} />
+              <meshStandardMaterial color={player.color} roughness={0.5} />
+            </mesh>
+            <group position={rightArmLocalPos} rotation={[swing, 0, 0.05]}>
+              <mesh position={[0, -0.25, 0]} castShadow>
+                <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
+                <meshStandardMaterial color={player.color} roughness={0.6} />
+              </mesh>
+              <mesh position={[0, -0.55, 0]} castShadow>
+                <sphereGeometry args={[0.11, 16, 16]} />
+                <meshStandardMaterial color="#7a3e19" roughness={0.7} />
+              </mesh>
+            </group>
+          </group>
+        ) : (
+          <group position={ragRightArmPos || defaultRightArmPos}>
+            <mesh position={[0, -0.25, 0]} castShadow>
+              <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
+              <meshStandardMaterial color={player.color} roughness={0.6} />
+            </mesh>
+          </group>
+        )}
 
         {/* LEFT ARM */}
-        <group
-          position={
-            off("leftArm")
-              ? [off("leftArm")!.x, off("leftArm")!.y, off("leftArm")!.z]
-              : [-0.42, 0.18, 0]
-          }
-          rotation={rag ? [0, 0, 0] : [-swing, 0, -0.05]}
-        >
-          <mesh position={[0, -0.25, 0]} castShadow>
-            <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
-            <meshStandardMaterial color={player.color} roughness={0.6} />
-          </mesh>
-          <mesh position={[0, -0.55, 0]} castShadow>
-            <sphereGeometry args={[0.11, 16, 16]} />
-            <meshStandardMaterial color="#7a3e19" roughness={0.7} />
-          </mesh>
-        </group>
+        {!rag ? (
+          <group position={leftShoulderPos}>
+            <mesh castShadow>
+              <sphereGeometry args={[0.14, 16, 16]} />
+              <meshStandardMaterial color={player.color} roughness={0.5} />
+            </mesh>
+            <group position={leftArmLocalPos} rotation={[-swing, 0, -0.05]}>
+              <mesh position={[0, -0.25, 0]} castShadow>
+                <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
+                <meshStandardMaterial color={player.color} roughness={0.6} />
+              </mesh>
+              <mesh position={[0, -0.55, 0]} castShadow>
+                <sphereGeometry args={[0.11, 16, 16]} />
+                <meshStandardMaterial color="#7a3e19" roughness={0.7} />
+              </mesh>
+            </group>
+          </group>
+        ) : (
+          <group position={ragLeftArmPos || defaultLeftArmPos}>
+            <mesh position={[0, -0.25, 0]} castShadow>
+              <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
+              <meshStandardMaterial color={player.color} roughness={0.6} />
+            </mesh>
+          </group>
+        )}
 
-        {/* RIGHT LEG (smooth hip connection) */}
-        <group
-          position={
-            off("rightLeg")
-              ? [off("rightLeg")!.x, off("rightLeg")!.y, off("rightLeg")!.z]
-              : [0.18, -0.45, 0]
-          }
-          rotation={rag ? [0, 0, 0] : [-swing, 0, 0]}
-        >
-          {/* hip connector (removes cut line) */}
-          <mesh position={[0, 0.15, 0]} castShadow>
-            <sphereGeometry args={[0.18, 18, 18]} />
-            <meshStandardMaterial color="#2a3142" roughness={0.7} />
-          </mesh>
-
+        {/* LEGS */}
+        <group position={off("rightLeg") ? [off("rightLeg")!.x, off("rightLeg")!.y, off("rightLeg")!.z] : [0.18, -0.45, 0]}>
           <mesh position={[0, -0.18, 0]} castShadow>
             <capsuleGeometry args={[0.13, 0.34, 6, 12]} />
             <meshStandardMaterial color="#2a3142" roughness={0.7} />
           </mesh>
         </group>
 
-        {/* LEFT LEG (smooth hip connection) */}
-        <group
-          position={
-            off("leftLeg")
-              ? [off("leftLeg")!.x, off("leftLeg")!.y, off("leftLeg")!.z]
-              : [-0.18, -0.45, 0]
-          }
-          rotation={rag ? [0, 0, 0] : [swing, 0, 0]}
-        >
-          <mesh position={[0, 0.15, 0]} castShadow>
-            <sphereGeometry args={[0.18, 18, 18]} />
-            <meshStandardMaterial color="#2a3142" roughness={0.7} />
-          </mesh>
-
+        <group position={off("leftLeg") ? [off("leftLeg")!.x, off("leftLeg")!.y, off("leftLeg")!.z] : [-0.18, -0.45, 0]}>
           <mesh position={[0, -0.18, 0]} castShadow>
             <capsuleGeometry args={[0.13, 0.34, 6, 12]} />
             <meshStandardMaterial color="#2a3142" roughness={0.7} />
@@ -153,52 +192,13 @@ export default function Avatar({
         </group>
 
         {/* HEAD */}
-        <mesh
-          position={
-            off("head")
-              ? [off("head")!.x, off("head")!.y, off("head")!.z]
-              : [0, 0.7, 0]
-          }
-          castShadow
-        >
+        <mesh position={off("head") ? [off("head")!.x, off("head")!.y, off("head")!.z] : [0, 0.7, 0]} castShadow>
           <sphereGeometry args={[0.3, 24, 24]} />
           <meshStandardMaterial color="#7a3e19" roughness={0.6} />
         </mesh>
 
-        {/* FACE */}
-        {!rag && (
-          <>
-            <mesh position={[0, 0.86, -0.02]} castShadow>
-              <sphereGeometry args={[0.31, 24, 24, 0, Math.PI * 2, 0, Math.PI / 2]} />
-              <meshStandardMaterial color="#000000" roughness={0.85} />
-            </mesh>
-
-            <mesh position={[0.1, 0.72, 0.27]}>
-              <sphereGeometry args={[0.045, 12, 12]} />
-              <meshBasicMaterial color="#0a0a0a" />
-            </mesh>
-
-            <mesh position={[-0.1, 0.72, 0.27]}>
-              <sphereGeometry args={[0.045, 12, 12]} />
-              <meshBasicMaterial color="#0a0a0a" />
-            </mesh>
-
-            <mesh position={[0, 0.6, 0.28]}>
-              <torusGeometry args={[0.07, 0.012, 8, 16, Math.PI]} />
-              <meshBasicMaterial color="#252525" />
-            </mesh>
-          </>
-        )}
-
-        {/* NAME TAG */}
-        <Html
-          position={[0, 1.25, 0]}
-          center
-          distanceFactor={8}
-          zIndexRange={[100, 0]}
-          sprite
-        >
-          <div className="px-2 py-0.5 rounded-md bg-black/70 text-white text-xs font-medium whitespace-nowrap pointer-events-none">
+        <Html position={[0, 1.25, 0]} center distanceFactor={8}>
+          <div className="px-2 py-0.5 rounded-md bg-black/70 text-white text-xs">
             {player.username}
           </div>
         </Html>
