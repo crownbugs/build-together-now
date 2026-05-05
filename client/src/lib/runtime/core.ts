@@ -278,10 +278,14 @@ export class GameRuntime {
       }
     }
 
+    // Auto-create a Baseplate + SpawnLocation if the world is empty so players
+    // never fall into a void on a brand new game.
+    this.ensureStarterWorld();
+
     const spawnObj = [...this._all.values()].find(o => o.name === "SpawnLocation" || o.type === "spawn");
     const spawnPoint: Vec3 = spawnObj
       ? { x: spawnObj.position.x, y: spawnObj.position.y + 1.2, z: spawnObj.position.z }
-      : { x: 0, y: 1, z: 4 };
+      : { x: 0, y: 1, z: 0 };
 
     this.player = {
       username,
@@ -293,23 +297,152 @@ export class GameRuntime {
       health: 100,
       maxHealth: 100,
       speed: 6,
+      walkSpeed: 6,
+      runSpeed: 12,
       jumpPower: 8,
       size: 1,
       spawnPoint,
       up: { x: 0, y: 1, z: 0 },
       inventory: createStubInventory(),
+      motors: {
+        attach: () => {},
+        detach: () => null,
+        get: () => null,
+        animation: "idle",
+      },
       autoFaceMovement: true,
+      ragdoll: false,
+      killY: -50,
       takeDamage: () => {},
       heal: () => {},
+      kill: () => {},
       teleport: () => {},
       respawn: () => {},
     };
 
     this.mountPlayerInventory();
     this.mountPlayerMethods();
+    this.mountPlayerMotors();
     this.initRunService();
-    const regularScripts = scripts.filter(s => s.enabled !== false && !this.moduleScripts.has(s.name));
+
+    // Honor the script's own scriptType: ModuleScripts only run via require().
+    // Script + LocalScript both auto-execute in this single-process runtime;
+    // when a real network is wired in they'll route to server vs. client.
+    const regularScripts = scripts.filter(s => {
+      if (s.enabled === false) return false;
+      const t = (s as any).scriptType ?? "Script";
+      if (t === "ModuleScript") return false;
+      if (this.moduleScripts.has(s.name)) return false;
+      return true;
+    });
     this.scripts = regularScripts.map(s => compileScript(s.code, s.name));
+  }
+
+  /** Spawn a Baseplate + SpawnLocation if Workspace is empty of solid ground. */
+  private ensureStarterWorld() {
+    const hasGround = [...this._all.values()].some(o =>
+      o.container === "Workspace" && o.canCollide && o.type !== "light" && o.type !== "spawn"
+    );
+    const hasSpawn = [...this._all.values()].some(o => o.name === "SpawnLocation" || o.type === "spawn");
+
+    if (!hasGround) {
+      const baseplate: RuntimeObject = this.mountObjectEvents({
+        id: newId(),
+        name: "Baseplate",
+        type: "primitive",
+        primitiveType: "cube",
+        container: "Workspace",
+        position: { x: 0, y: -0.5, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 80, y: 1, z: 80 },
+        color: "#3a4252",
+        visible: true,
+        anchored: true,
+        canCollide: true,
+        transparency: 0,
+        mass: 1,
+        friction: 0.4,
+        gravity: false,
+        velocity: { x: 0, y: 0, z: 0 },
+        on: () => () => {},
+        off: () => {},
+        parentId: null,
+        children: [],
+        findFirstChild: () => null,
+        setParent: () => {},
+        GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+        _gravityExclusions: new Set(),
+        setAttribute: () => {},
+        getAttribute: () => undefined,
+        getAttributes: () => ({}),
+        __cleanup: new Set(),
+      } as RuntimeObject);
+      this._all.set(baseplate.id, baseplate);
+    }
+
+    if (!hasSpawn) {
+      const spawn: RuntimeObject = this.mountObjectEvents({
+        id: newId(),
+        name: "SpawnLocation",
+        type: "spawn",
+        primitiveType: "cube",
+        container: "Workspace",
+        position: { x: 0, y: 0.1, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 4, y: 0.2, z: 4 },
+        color: "#9ca3af",
+        visible: true,
+        anchored: true,
+        canCollide: false,
+        transparency: 0,
+        mass: 1,
+        friction: 0.4,
+        gravity: false,
+        velocity: { x: 0, y: 0, z: 0 },
+        on: () => () => {},
+        off: () => {},
+        parentId: null,
+        children: [],
+        findFirstChild: () => null,
+        setParent: () => {},
+        GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+        _gravityExclusions: new Set(),
+        setAttribute: () => {},
+        getAttribute: () => undefined,
+        getAttributes: () => ({}),
+        __cleanup: new Set(),
+      } as RuntimeObject);
+      this._all.set(spawn.id, spawn);
+    }
+
+    if (!hasGround || !hasSpawn) this.rebuildIndexes();
+  }
+
+  private mountPlayerMotors() {
+    const slots = this.motorState;
+    const p = this.player;
+    p.motors = {
+      attach: (slot, obj, offset, rotation) => {
+        if (!obj) { slots.delete(slot); return; }
+        // Pinning anchored objects would freeze them in place — un-anchor.
+        obj.anchored = false;
+        obj.canCollide = false;
+        slots.set(slot, {
+          obj,
+          offset: offset ? { x: offset.x ?? 0, y: offset.y ?? 0, z: offset.z ?? 0 } : { x: 0, y: 0, z: 0 },
+          rotation: rotation ? { x: rotation.x ?? 0, y: rotation.y ?? 0, z: rotation.z ?? 0 } : { x: 0, y: 0, z: 0 },
+        });
+      },
+      detach: (slot) => {
+        const m = slots.get(slot);
+        if (!m) return null;
+        slots.delete(slot);
+        m.obj.canCollide = true;
+        return m.obj;
+      },
+      get: (slot) => slots.get(slot)?.obj ?? null,
+      animation: "idle",
+    };
   }
 
   private normalizeContainer(raw: string | undefined | null): ContainerName {
