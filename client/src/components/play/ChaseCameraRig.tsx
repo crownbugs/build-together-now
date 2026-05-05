@@ -74,7 +74,7 @@ export default function ChaseCameraRig({ runtime }: { runtime: GameRuntime }) {
         ctl.maxDistance = cfg.maxDistance;
         ctl.rotateSpeed = cfg.sensitivity;
         ctl.enableRotate = !(cfg.lockYaw && cfg.lockPitch);
-        ctl.enabled = cfg.mode !== "firstPerson";
+        ctl.enabled = (cfg.mode as string) !== "firstPerson";
         ctl.update();
       }
     }
