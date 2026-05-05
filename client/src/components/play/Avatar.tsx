@@ -11,8 +11,9 @@ import { GameRuntime, type RuntimePlayer } from "@/lib/gameRuntime";
  * scripts can override (e.g. set "shoot", "wave"). When the player ragdolls,
  * limbs render at offsets read from `runtime._ragdollPos`.
  * 
- * The torso is a cylinder with rounded top/bottom edges (not full hemispheres).
- * The caps are flattened spheres → “round but not too round”.
+ * The torso is a cylinder with slightly rounded top and bottom edges.
+ * The rounding is achieved by flattened spheres that blend seamlessly into
+ * the cylinder ends – no gaps, no z‑fighting.
  */
 export default function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRuntime }) {
   const anim = player.motors.animation;
@@ -28,7 +29,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const rag = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const off = (k: string) => (rag && rag[k] ? rag[k] : null);
 
-  // Shoulder positions
+  // Shoulder positions (torso-relative)
   const rightShoulderPos = new THREE.Vector3(0.42, 0.38, 0);
   const leftShoulderPos = new THREE.Vector3(-0.42, 0.38, 0);
   
@@ -40,32 +41,40 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const ragRightArmPos = off("rightArm") ? new THREE.Vector3(off("rightArm")!.x, off("rightArm")!.y, off("rightArm")!.z) : null;
   const ragLeftArmPos = off("leftArm") ? new THREE.Vector3(off("leftArm")!.x, off("leftArm")!.y, off("leftArm")!.z) : null;
 
-  // Torso dimensions
+  // Torso dimensions – the rounded caps are seamlessly attached to the cylinder ends
   const torsoRadius = 0.32;
-  const torsoHeight = 0.7;      // height of the straight cylinder part
-  const capHeight = 0.12;       // how tall the rounded cap is (flattened)
-  const torsoTotalYCenter = 0.05; // keep same center as original capsule
+  const torsoHeight = 0.7;           // straight cylinder part height
+  const capHeight = 0.1;              // how much the cap protrudes (subtle rounding)
+  const torsoTotalYCenter = 0.05;     // keep same center as before
 
   return (
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
       <group rotation={[0, player.rotation.y, 0]} scale={[size, size, size]}>
         
-        {/* ROUNDED CYLINDER TORSO (subtle rounding) */}
+        {/* TORSO – cylinder with integrated rounded ends */}
         <group position={off("torso") ? [off("torso")!.x, off("torso")!.y, off("torso")!.z] : [0, torsoTotalYCenter, 0]}>
-          {/* Main cylinder */}
+          {/* Main cylinder (its flat end caps are hidden by the spheres) */}
           <mesh castShadow position={[0, 0, 0]}>
             <cylinderGeometry args={[torsoRadius, torsoRadius, torsoHeight, 24, 16]} />
             <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
           </mesh>
           
-          {/* Top cap – flattened sphere (gentle rounding) */}
-          <mesh castShadow position={[0, torsoHeight / 2 + capHeight / 2, 0]} scale={[1, capHeight / torsoRadius, 1]}>
+          {/* Top rounded cap – flattened sphere exactly at cylinder top */}
+          <mesh 
+            castShadow 
+            position={[0, torsoHeight / 2, 0]} 
+            scale={[1, capHeight / torsoRadius, 1]}
+          >
             <sphereGeometry args={[torsoRadius, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2]} />
             <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
           </mesh>
           
-          {/* Bottom cap – flattened sphere (gentle rounding) */}
-          <mesh castShadow position={[0, -torsoHeight / 2 - capHeight / 2, 0]} scale={[1, capHeight / torsoRadius, 1]}>
+          {/* Bottom rounded cap – exactly at cylinder bottom */}
+          <mesh 
+            castShadow 
+            position={[0, -torsoHeight / 2, 0]} 
+            scale={[1, capHeight / torsoRadius, 1]}
+          >
             <sphereGeometry args={[torsoRadius, 24, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2]} />
             <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
           </mesh>
@@ -141,7 +150,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </group>
         )}
 
-        {/* LEGS (unchanged) */}
+        {/* LEGS */}
         <group position={off("rightLeg") ? [off("rightLeg")!.x, off("rightLeg")!.y, off("rightLeg")!.z] : [0.18, -0.45, 0]} rotation={rag ? [0, 0, 0] : [-swing, 0, 0]}>
           <mesh position={[0, -0.18, 0]} castShadow>
             <capsuleGeometry args={[0.13, 0.34, 6, 12]} />
