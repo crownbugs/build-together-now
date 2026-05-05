@@ -37,7 +37,7 @@ export default function Avatar({
     >
       <group rotation={[0, player.rotation.y, 0]} scale={[size, size, size]}>
 
-        {/* 🟡 TRUE JELLY BEAN TORSO (lathe geometry) */}
+        {/* 🟡 CONNECTED CAPSULE–BEAN TORSO */}
         <mesh
           position={
             off("torso")
@@ -46,43 +46,22 @@ export default function Avatar({
           }
           castShadow
         >
-          <latheGeometry
-            args={[
-              (() => {
-                const points: THREE.Vector2[] = [];
-
-                const height = 1.2;
-                const steps = 32;
-
-                for (let i = 0; i <= steps; i++) {
-                  const t = i / steps;
-
-                  // 🫘 real bean silhouette curve
-                  const width =
-                    0.22 +
-                    0.28 * Math.sin(Math.PI * t) * Math.sin(Math.PI * t) +
-                    (t < 0.2 ? 0.02 : 0) +   // slight bottom pinch
-                    (t > 0.8 ? 0.03 : 0);    // slight top taper
-
-                  const y = (t - 0.5) * height;
-
-                  points.push(new THREE.Vector2(width, y));
-                }
-
-                return points;
-              })(),
-              48
-            ]}
-          />
+          <capsuleGeometry args={[0.34, 0.7, 16, 32]} />
 
           <meshStandardMaterial
             color={player.color}
             roughness={0.55}
             metalness={0.05}
           />
+
+          {/* 👇 subtle “bean distortion” feel (not geometry split, just shaping) */}
+          <group
+            scale={[0.78, 1.12, 0.86]}
+            position={[0.02, 0.0, -0.01]}
+          />
         </mesh>
 
-        {/* feet base */}
+        {/* FEET BASE */}
         {!rag && (
           <mesh position={[0, -0.18, 0]} castShadow>
             <cylinderGeometry args={[0.34, 0.34, 0.08, 24]} />
@@ -90,7 +69,7 @@ export default function Avatar({
           </mesh>
         )}
 
-        {/* right arm */}
+        {/* RIGHT ARM */}
         <group
           position={
             off("rightArm")
@@ -103,13 +82,14 @@ export default function Avatar({
             <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
             <meshStandardMaterial color={player.color} roughness={0.6} />
           </mesh>
+
           <mesh position={[0, -0.55, 0]} castShadow>
             <sphereGeometry args={[0.11, 16, 16]} />
-            <meshStandardMaterial color={"#7a3e19"} roughness={0.7} />
+            <meshStandardMaterial color="#7a3e19" roughness={0.7} />
           </mesh>
         </group>
 
-        {/* left arm */}
+        {/* LEFT ARM */}
         <group
           position={
             off("leftArm")
@@ -122,13 +102,14 @@ export default function Avatar({
             <capsuleGeometry args={[0.1, 0.42, 6, 12]} />
             <meshStandardMaterial color={player.color} roughness={0.6} />
           </mesh>
+
           <mesh position={[0, -0.55, 0]} castShadow>
             <sphereGeometry args={[0.11, 16, 16]} />
-            <meshStandardMaterial color={"#7a3e19"} roughness={0.7} />
+            <meshStandardMaterial color="#7a3e19" roughness={0.7} />
           </mesh>
         </group>
 
-        {/* right leg */}
+        {/* RIGHT LEG */}
         <group
           position={
             off("rightLeg")
@@ -143,7 +124,7 @@ export default function Avatar({
           </mesh>
         </group>
 
-        {/* left leg */}
+        {/* LEFT LEG */}
         <group
           position={
             off("leftLeg")
@@ -158,7 +139,7 @@ export default function Avatar({
           </mesh>
         </group>
 
-        {/* head */}
+        {/* HEAD */}
         <mesh
           position={
             off("head")
@@ -168,10 +149,10 @@ export default function Avatar({
           castShadow
         >
           <sphereGeometry args={[0.3, 24, 24]} />
-          <meshStandardMaterial color={"#7a3e19"} roughness={0.6} />
+          <meshStandardMaterial color="#7a3e19" roughness={0.6} />
         </mesh>
 
-        {/* face */}
+        {/* FACE */}
         {!rag && (
           <>
             <mesh position={[0, 0.86, -0.02]} castShadow>
@@ -196,7 +177,7 @@ export default function Avatar({
           </>
         )}
 
-        {/* name tag */}
+        {/* NAME TAG */}
         <Html
           position={[0, 1.25, 0]}
           center
