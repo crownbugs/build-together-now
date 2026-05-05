@@ -3,17 +3,9 @@ import * as THREE from "three";
 import { GameRuntime, type RuntimePlayer } from "@/lib/gameRuntime";
 
 /**
- * 3rd-person character mesh. Orientation is built from the player's "up"
- * vector (so feet point at gravity) plus a Y rotation managed by the
- * runtime's autoFaceMovement / script logic.
- *
- * Walk/run animation cycles are driven by `player.motors.animation` so
- * scripts can override (e.g. set "shoot", "wave"). When the player ragdolls,
- * limbs render at offsets read from `runtime._ragdollPos`.
- * 
- * The torso is a cylinder with slightly rounded top and bottom edges.
- * The rounding is achieved by flattened spheres that blend seamlessly into
- * the cylinder ends – no gaps, no z‑fighting.
+ * 3rd-person character mesh. Torso is a capsule with a long cylindrical midsection
+ * and very small hemispherical caps – providing a smooth, beveled look without
+ * the "dipper" effect. Shoulders are integrated on the straight part of the torso.
  */
 export default function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRuntime }) {
   const anim = player.motors.animation;
@@ -29,9 +21,12 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const rag = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const off = (k: string) => (rag && rag[k] ? rag[k] : null);
 
-  // Shoulder positions (torso-relative)
-  const rightShoulderPos = new THREE.Vector3(0.42, 0.38, 0);
-  const leftShoulderPos = new THREE.Vector3(-0.42, 0.38, 0);
+  // Shoulder positions – now placed on the cylindrical part, just below the top cap
+  const torsoRadius = 0.32;
+  const topCapHeight = 0.12;          // small hemisphere cap (subtle rounding)
+  const cylinderTopY = 0.5;            // top of the straight cylinder (before cap starts)
+  const rightShoulderPos = new THREE.Vector3(0.42, cylinderTopY - 0.08, 0);
+  const leftShoulderPos = new THREE.Vector3(-0.42, cylinderTopY - 0.08, 0);
   
   const defaultRightArmPos = new THREE.Vector3(0.42, 0.18, 0);
   const defaultLeftArmPos = new THREE.Vector3(-0.42, 0.18, 0);
@@ -41,41 +36,22 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const ragRightArmPos = off("rightArm") ? new THREE.Vector3(off("rightArm")!.x, off("rightArm")!.y, off("rightArm")!.z) : null;
   const ragLeftArmPos = off("leftArm") ? new THREE.Vector3(off("leftArm")!.x, off("leftArm")!.y, off("leftArm")!.z) : null;
 
-  // Torso dimensions – the rounded caps are seamlessly attached to the cylinder ends
-  const torsoRadius = 0.32;
-  const torsoHeight = 0.7;           // straight cylinder part height
-  const capHeight = 0.1;              // how much the cap protrudes (subtle rounding)
-  const torsoTotalYCenter = 0.05;     // keep same center as before
+  // Torso: capsule with long cylinder (height = 0.9) and small caps (radius 0.32)
+  // Total capsule height = cylinderHeight + 2 * radius = 0.9 + 0.64 = 1.54
+  // We'll position it so the bottom sits around y = -0.4, top around y = 1.14
+  const capsuleHeight = 1.2;           // total height (cylinder + two hemispheres)
+  const capsuleRadius = 0.32;
+  const cylinderHeight = capsuleHeight - 2 * capsuleRadius; // 1.2 - 0.64 = 0.56
+  const torsoYCenter = 0.15;           // adjusted so body sits naturally on legs
 
   return (
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
       <group rotation={[0, player.rotation.y, 0]} scale={[size, size, size]}>
         
-        {/* TORSO – cylinder with integrated rounded ends */}
-        <group position={off("torso") ? [off("torso")!.x, off("torso")!.y, off("torso")!.z] : [0, torsoTotalYCenter, 0]}>
-          {/* Main cylinder (its flat end caps are hidden by the spheres) */}
-          <mesh castShadow position={[0, 0, 0]}>
-            <cylinderGeometry args={[torsoRadius, torsoRadius, torsoHeight, 24, 16]} />
-            <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
-          </mesh>
-          
-          {/* Top rounded cap – flattened sphere exactly at cylinder top */}
-          <mesh 
-            castShadow 
-            position={[0, torsoHeight / 2, 0]} 
-            scale={[1, capHeight / torsoRadius, 1]}
-          >
-            <sphereGeometry args={[torsoRadius, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2]} />
-            <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
-          </mesh>
-          
-          {/* Bottom rounded cap – exactly at cylinder bottom */}
-          <mesh 
-            castShadow 
-            position={[0, -torsoHeight / 2, 0]} 
-            scale={[1, capHeight / torsoRadius, 1]}
-          >
-            <sphereGeometry args={[torsoRadius, 24, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2]} />
+        {/* SMOOTH TORSO – long cylinder with gentle hemispherical caps */}
+        <group position={off("torso") ? [off("torso")!.x, off("torso")!.y, off("torso")!.z] : [0, torsoYCenter, 0]}>
+          <mesh castShadow>
+            <capsuleGeometry args={[capsuleRadius, capsuleHeight, 12, 24]} />
             <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
           </mesh>
         </group>
@@ -91,6 +67,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
         {/* RIGHT SHOULDER & ARM */}
         {!rag ? (
           <group position={rightShoulderPos}>
+            {/* Shoulder joint – blends with torso curve */}
             <mesh castShadow>
               <sphereGeometry args={[0.14, 16, 16]} />
               <meshStandardMaterial color={player.color} roughness={0.5} />
@@ -170,7 +147,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           <meshStandardMaterial color="#7a3e19" roughness={0.6} />
         </mesh>
         
-        {/* FACE (only when not ragdoll) */}
+        {/* FACE */}
         {!rag && (
           <>
             <mesh position={[0, 0.86, -0.02]} castShadow>
