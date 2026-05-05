@@ -293,6 +293,7 @@ export type GameAPI = {
   mouse: MouseAPI;
   world: WorldAPI;
   runService: RunServiceAPI;
+  camera: RuntimeCamera;
   time: number;
   dt: number;
   now: () => number;
