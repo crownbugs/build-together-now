@@ -43,8 +43,8 @@ export default function Avatar({
       quaternion={orientQuat}
     >
       <group rotation={[0, player.rotation.y, 0]} scale={[size, size, size]}>
-        
-        {/* 🟤 JELLY BEAN TORSO (replaces capsule) */}
+
+        {/* 🟤 HYBRID TORSO (bean bottom + capsule middle + bean top) */}
         <group
           position={
             off("torso")
@@ -52,16 +52,49 @@ export default function Avatar({
               : [0, 0.05, 0]
           }
         >
-          <mesh castShadow scale={[0.75, 1.15, 0.85]}>
-            <sphereGeometry args={[0.38, 24, 24]} />
-            <meshStandardMaterial
-              color={player.color}
-              roughness={0.55}
-              metalness={0.05}
-            />
-          </mesh>
+          {(() => {
+            const radius = 0.38;
+            const height = 0.7;
+
+            return (
+              <>
+                {/* 🔻 bottom jelly bean */}
+                <mesh position={[0, -height / 2, 0]} castShadow>
+                  <sphereGeometry args={[radius * 0.95, 24, 24]} />
+                  <meshStandardMaterial
+                    color={player.color}
+                    roughness={0.55}
+                    metalness={0.05}
+                  />
+                </mesh>
+
+                {/* 🧱 capsule middle */}
+                <mesh castShadow>
+                  <cylinderGeometry
+                    args={[radius * 0.85, radius * 0.85, height, 24]}
+                  />
+                  <meshStandardMaterial
+                    color={player.color}
+                    roughness={0.55}
+                    metalness={0.05}
+                  />
+                </mesh>
+
+                {/* 🔺 top jelly bean */}
+                <mesh position={[0, height / 2, 0]} castShadow>
+                  <sphereGeometry args={[radius * 1.05, 24, 24]} />
+                  <meshStandardMaterial
+                    color={player.color}
+                    roughness={0.55}
+                    metalness={0.05}
+                  />
+                </mesh>
+              </>
+            );
+          })()}
         </group>
 
+        {/* feet base */}
         {!rag && (
           <mesh position={[0, -0.18, 0]} castShadow>
             <cylinderGeometry args={[0.34, 0.34, 0.08, 24]} />
@@ -69,6 +102,7 @@ export default function Avatar({
           </mesh>
         )}
 
+        {/* right arm */}
         <group
           position={
             off("rightArm")
@@ -87,6 +121,7 @@ export default function Avatar({
           </mesh>
         </group>
 
+        {/* left arm */}
         <group
           position={
             off("leftArm")
@@ -105,6 +140,7 @@ export default function Avatar({
           </mesh>
         </group>
 
+        {/* right leg */}
         <group
           position={
             off("rightLeg")
@@ -119,6 +155,7 @@ export default function Avatar({
           </mesh>
         </group>
 
+        {/* left leg */}
         <group
           position={
             off("leftLeg")
@@ -133,6 +170,7 @@ export default function Avatar({
           </mesh>
         </group>
 
+        {/* head */}
         <mesh
           position={
             off("head")
@@ -145,6 +183,7 @@ export default function Avatar({
           <meshStandardMaterial color={"#7a3e19"} roughness={0.6} />
         </mesh>
 
+        {/* face */}
         {!rag && (
           <>
             <mesh position={[0, 0.86, -0.02]} castShadow>
@@ -169,6 +208,7 @@ export default function Avatar({
           </>
         )}
 
+        {/* name tag */}
         <Html
           position={[0, 1.25, 0]}
           center
@@ -180,6 +220,7 @@ export default function Avatar({
             {player.username}
           </div>
         </Html>
+
       </group>
     </group>
   );
