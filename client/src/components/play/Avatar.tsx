@@ -11,6 +11,7 @@ export default function Avatar({
 }) {
   const anim = player.motors.animation;
   const horiz = Math.hypot(player.velocity.x, player.velocity.z);
+
   const moveAmount = Math.min(
     1,
     horiz / Math.max(1, player.runSpeed || player.speed)
@@ -36,7 +37,7 @@ export default function Avatar({
     >
       <group rotation={[0, player.rotation.y, 0]} scale={[size, size, size]}>
 
-        {/* 🟡 CARTOON JELLY BEAN BODY (single organic mesh) */}
+        {/* 🟡 TRUE JELLY BEAN TORSO (lathe geometry) */}
         <mesh
           position={
             off("torso")
@@ -45,18 +46,40 @@ export default function Avatar({
           }
           castShadow
         >
-          {/* base sphere */}
-          <sphereGeometry args={[0.45, 32, 32]} />
+          <latheGeometry
+            args={[
+              (() => {
+                const points: THREE.Vector2[] = [];
 
-          {/* bean-like squash: wider middle, tapered ends */}
+                const height = 1.2;
+                const steps = 32;
+
+                for (let i = 0; i <= steps; i++) {
+                  const t = i / steps;
+
+                  // 🫘 real bean silhouette curve
+                  const width =
+                    0.22 +
+                    0.28 * Math.sin(Math.PI * t) * Math.sin(Math.PI * t) +
+                    (t < 0.2 ? 0.02 : 0) +   // slight bottom pinch
+                    (t > 0.8 ? 0.03 : 0);    // slight top taper
+
+                  const y = (t - 0.5) * height;
+
+                  points.push(new THREE.Vector2(width, y));
+                }
+
+                return points;
+              })(),
+              48
+            ]}
+          />
+
           <meshStandardMaterial
             color={player.color}
             roughness={0.55}
             metalness={0.05}
           />
-
-          {/* shape distortion via scale */}
-          <group scale={[0.75, 1.15, 0.75]} />
         </mesh>
 
         {/* feet base */}
