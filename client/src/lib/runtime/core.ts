@@ -1,10 +1,10 @@
 // core.ts
 import type { GameObject, Script } from "@shared/schema";
-import { TweenManager } from "./runtime/tween";
-import { HierarchyIndex } from "./runtime/hierarchy";
-import { raycast as raycastWorld } from "./runtime/raycast";
-import { resolveObjectCollisions } from "./runtime/collision";
-import { NetworkBus } from "./runtime/network";
+import { TweenManager } from "./tween";
+import { HierarchyIndex } from "./hierarchy";
+import { raycast as raycastWorld } from "./raycast";
+import { resolveObjectCollisions } from "./collision";
+import { NetworkBus } from "./network";
 
 import {
   type ContainerName,
@@ -20,7 +20,7 @@ import {
   type GuiElement,
   type EngineEvents,
   type EventChannel,
-  type EventBus,
+  EventBus,
   type KeyboardAPI,
   type MouseAPI,
   type WorldAPI,
@@ -186,6 +186,22 @@ export class GameRuntime {
   gui = new Map<string, GuiElement>();
   guiVersion = 0;
   runService!: RunServiceAPI;
+  /** Scriptable camera config — read by ChaseCameraRig each frame. */
+  camera: import("./types").RuntimeCamera = {
+    mode: "thirdPerson",
+    distance: 6,
+    minDistance: 2,
+    maxDistance: 20,
+    offset: { x: 0, y: 0.7, z: 0 },
+    sensitivity: 1,
+    lockYaw: false,
+    lockPitch: false,
+    position: { x: 0, y: 4, z: 8 },
+    lookAt: { x: 0, y: 0, z: 0 },
+    fov: 60,
+  };
+  /** Per-slot motor state (which RuntimeObject to pin to the player rig). */
+  motorState = new Map<string, { obj: RuntimeObject; offset: Vec3; rotation: Vec3 }>();
 
   private tagManager = new TagManager();
   private taskScheduler = new TaskScheduler();
@@ -262,10 +278,14 @@ export class GameRuntime {
       }
     }
 
+    // Auto-create a Baseplate + SpawnLocation if the world is empty so players
+    // never fall into a void on a brand new game.
+    this.ensureStarterWorld();
+
     const spawnObj = [...this._all.values()].find(o => o.name === "SpawnLocation" || o.type === "spawn");
     const spawnPoint: Vec3 = spawnObj
       ? { x: spawnObj.position.x, y: spawnObj.position.y + 1.2, z: spawnObj.position.z }
-      : { x: 0, y: 1, z: 4 };
+      : { x: 0, y: 1, z: 0 };
 
     this.player = {
       username,
@@ -277,23 +297,152 @@ export class GameRuntime {
       health: 100,
       maxHealth: 100,
       speed: 6,
+      walkSpeed: 6,
+      runSpeed: 12,
       jumpPower: 8,
       size: 1,
       spawnPoint,
       up: { x: 0, y: 1, z: 0 },
       inventory: createStubInventory(),
+      motors: {
+        attach: () => {},
+        detach: () => null,
+        get: () => null,
+        animation: "idle",
+      },
       autoFaceMovement: true,
+      ragdoll: false,
+      killY: -50,
       takeDamage: () => {},
       heal: () => {},
+      kill: () => {},
       teleport: () => {},
       respawn: () => {},
     };
 
     this.mountPlayerInventory();
     this.mountPlayerMethods();
+    this.mountPlayerMotors();
     this.initRunService();
-    const regularScripts = scripts.filter(s => s.enabled !== false && !this.moduleScripts.has(s.name));
+
+    // Honor the script's own scriptType: ModuleScripts only run via require().
+    // Script + LocalScript both auto-execute in this single-process runtime;
+    // when a real network is wired in they'll route to server vs. client.
+    const regularScripts = scripts.filter(s => {
+      if (s.enabled === false) return false;
+      const t = (s as any).scriptType ?? "Script";
+      if (t === "ModuleScript") return false;
+      if (this.moduleScripts.has(s.name)) return false;
+      return true;
+    });
     this.scripts = regularScripts.map(s => compileScript(s.code, s.name));
+  }
+
+  /** Spawn a Baseplate + SpawnLocation if Workspace is empty of solid ground. */
+  private ensureStarterWorld() {
+    const hasGround = [...this._all.values()].some(o =>
+      o.container === "Workspace" && o.canCollide && o.type !== "light" && o.type !== "spawn"
+    );
+    const hasSpawn = [...this._all.values()].some(o => o.name === "SpawnLocation" || o.type === "spawn");
+
+    if (!hasGround) {
+      const baseplate: RuntimeObject = this.mountObjectEvents({
+        id: newId(),
+        name: "Baseplate",
+        type: "primitive",
+        primitiveType: "cube",
+        container: "Workspace",
+        position: { x: 0, y: -0.5, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 80, y: 1, z: 80 },
+        color: "#3a4252",
+        visible: true,
+        anchored: true,
+        canCollide: true,
+        transparency: 0,
+        mass: 1,
+        friction: 0.4,
+        gravity: false,
+        velocity: { x: 0, y: 0, z: 0 },
+        on: () => () => {},
+        off: () => {},
+        parentId: null,
+        children: [],
+        findFirstChild: () => null,
+        setParent: () => {},
+        GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+        _gravityExclusions: new Set(),
+        setAttribute: () => {},
+        getAttribute: () => undefined,
+        getAttributes: () => ({}),
+        __cleanup: new Set(),
+      } as RuntimeObject);
+      this._all.set(baseplate.id, baseplate);
+    }
+
+    if (!hasSpawn) {
+      const spawn: RuntimeObject = this.mountObjectEvents({
+        id: newId(),
+        name: "SpawnLocation",
+        type: "spawn",
+        primitiveType: "cube",
+        container: "Workspace",
+        position: { x: 0, y: 0.1, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 4, y: 0.2, z: 4 },
+        color: "#9ca3af",
+        visible: true,
+        anchored: true,
+        canCollide: false,
+        transparency: 0,
+        mass: 1,
+        friction: 0.4,
+        gravity: false,
+        velocity: { x: 0, y: 0, z: 0 },
+        on: () => () => {},
+        off: () => {},
+        parentId: null,
+        children: [],
+        findFirstChild: () => null,
+        setParent: () => {},
+        GetPropertyChangedSignal: () => ({ on: () => () => {}, off: () => {} }),
+        _gravityExclusions: new Set(),
+        setAttribute: () => {},
+        getAttribute: () => undefined,
+        getAttributes: () => ({}),
+        __cleanup: new Set(),
+      } as RuntimeObject);
+      this._all.set(spawn.id, spawn);
+    }
+
+    if (!hasGround || !hasSpawn) this.rebuildIndexes();
+  }
+
+  private mountPlayerMotors() {
+    const slots = this.motorState;
+    const p = this.player;
+    p.motors = {
+      attach: (slot, obj, offset, rotation) => {
+        if (!obj) { slots.delete(slot); return; }
+        // Pinning anchored objects would freeze them in place — un-anchor.
+        obj.anchored = false;
+        obj.canCollide = false;
+        slots.set(slot, {
+          obj,
+          offset: offset ? { x: offset.x ?? 0, y: offset.y ?? 0, z: offset.z ?? 0 } : { x: 0, y: 0, z: 0 },
+          rotation: rotation ? { x: rotation.x ?? 0, y: rotation.y ?? 0, z: rotation.z ?? 0 } : { x: 0, y: 0, z: 0 },
+        });
+      },
+      detach: (slot) => {
+        const m = slots.get(slot);
+        if (!m) return null;
+        slots.delete(slot);
+        m.obj.canCollide = true;
+        return m.obj;
+      },
+      get: (slot) => slots.get(slot)?.obj ?? null,
+      animation: "idle",
+    };
   }
 
   private normalizeContainer(raw: string | undefined | null): ContainerName {
@@ -384,17 +533,58 @@ export class GameRuntime {
 
   private mountPlayerMethods() {
     const p = this.player;
-    p.takeDamage = (n: number) => { p.health = Math.max(0, p.health - n); if (p.health <= 0) p.respawn(); };
+    p.takeDamage = (n: number) => {
+      if (p.ragdoll) return;
+      p.health = Math.max(0, p.health - n);
+      if (p.health <= 0) p.kill();
+    };
     p.heal = (n: number) => { p.health = Math.min(p.maxHealth, p.health + n); };
-    p.teleport = (x: number, y: number, z: number) => { p.position.x = x; p.position.y = y; p.position.z = z; p.velocity.x = 0; p.velocity.y = 0; p.velocity.z = 0; };
-    p.respawn = () => { 
+    p.teleport = (x: number, y: number, z: number) => {
+      p.position.x = x; p.position.y = y; p.position.z = z;
+      p.velocity.x = 0; p.velocity.y = 0; p.velocity.z = 0;
+    };
+    p.kill = () => {
+      if (p.ragdoll) return;
+      p.health = 0;
+      p.ragdoll = true;
+      // Pre-seed limb velocities so the avatar visibly scatters before respawn.
+      this._ragdollVel = {
+        torso: { x: (Math.random() - 0.5) * 4, y: 5, z: (Math.random() - 0.5) * 4 },
+        head:  { x: (Math.random() - 0.5) * 6, y: 7, z: (Math.random() - 0.5) * 6 },
+        leftArm:  { x: -3 + Math.random() * 2, y: 5 + Math.random() * 2, z: (Math.random() - 0.5) * 4 },
+        rightArm: { x:  3 + Math.random() * 2, y: 5 + Math.random() * 2, z: (Math.random() - 0.5) * 4 },
+        leftLeg:  { x: (Math.random() - 0.5) * 4, y: 4 + Math.random() * 2, z: -3 + Math.random() * 2 },
+        rightLeg: { x: (Math.random() - 0.5) * 4, y: 4 + Math.random() * 2, z:  3 + Math.random() * 2 },
+      };
+      this._ragdollPos = {
+        torso: { x: 0, y: 0.05, z: 0 },
+        head:  { x: 0, y: 0.7, z: 0 },
+        leftArm: { x: -0.42, y: 0.18, z: 0 },
+        rightArm: { x: 0.42, y: 0.18, z: 0 },
+        leftLeg:  { x: -0.18, y: -0.45, z: 0 },
+        rightLeg: { x:  0.18, y: -0.45, z: 0 },
+      };
+      this._ragdollUntil = this.time + 1.6;
+      this._events.emit("playerDied", [p], () => {});
+      this.pushLog(`${p.username} died.`);
+    };
+    p.respawn = () => {
       const sp = p.spawnPoint;
       p.position.x = sp.x; p.position.y = sp.y; p.position.z = sp.z;
       p.velocity.x = 0; p.velocity.y = 0; p.velocity.z = 0;
       p.health = p.maxHealth;
+      p.ragdoll = false;
+      this._ragdollVel = null;
+      this._ragdollPos = null;
+      this._events.emit("playerSpawned", [p], () => {});
       this.pushLog(`${p.username} respawned.`);
     };
   }
+
+  /** Visible in Avatar.tsx — limb world offsets while ragdolling. */
+  _ragdollPos: Record<string, Vec3> | null = null;
+  private _ragdollVel: Record<string, Vec3> | null = null;
+  private _ragdollUntil = 0;
 
   private mountObjectEvents(raw: RuntimeObject): RuntimeObject {
     const id = raw.id;
@@ -769,7 +959,7 @@ export class GameRuntime {
     const taskApi = {
       wait: (seconds: number) => this.taskScheduler.wait(seconds),
       delay: (seconds: number, callback: () => void) => this.taskScheduler.delay(seconds, callback),
-      spawn: (fn: Function, ...args: any[]) => this.taskScheduler.spawn(fn, ...args),
+      spawn: (fn: (...args: any[]) => any, ...args: any[]) => this.taskScheduler.spawn(fn, ...args),
     };
     const debugApi = {
       getChildren: (obj: RuntimeObject) => obj.children,
@@ -812,7 +1002,8 @@ export class GameRuntime {
       keyboard: keyboardApi, 
       mouse: mouseApi, 
       world: worldApi, 
-      runService: this.runService, 
+      runService: this.runService,
+      camera: this.camera,
       time: this.time, 
       dt, 
       now, 
@@ -983,30 +1174,41 @@ export class GameRuntime {
     const rx = fy * p.up.z - fz * p.up.y;
     const rz = fx * p.up.y - fy * p.up.x;
 
-    const speed = p.speed || 6;
+    // Sprint: Shift doubles toward p.runSpeed.
+    const sprinting = !!(this.input.keys["shift"] || this.input.keys["shiftleft"] || this.input.keys["shiftright"]);
+    const baseSpeed = sprinting ? (p.runSpeed || p.speed * 1.6) : (p.walkSpeed || p.speed);
+    p.speed = baseSpeed;
+
     const wantX = rx * this.input.moveX - fx * this.input.moveZ;
     const wantZ = rz * this.input.moveX - fz * this.input.moveZ;
     const upVelDot = p.velocity.x * p.up.x + p.velocity.y * p.up.y + p.velocity.z * p.up.z;
-    p.velocity.x = wantX * speed + p.up.x * upVelDot;
-    p.velocity.z = wantZ * speed + p.up.z * upVelDot;
 
-    if (p.autoFaceMovement) {
-      const moveMag = Math.hypot(wantX, wantZ);
-      if (moveMag > 0.05) {
-        const targetYaw = Math.atan2(wantX, wantZ);
-        let diff = targetYaw - p.rotation.y;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        p.rotation.y += diff * Math.min(1, dt * 12);
+    if (!p.ragdoll) {
+      p.velocity.x = wantX * baseSpeed + p.up.x * upVelDot;
+      p.velocity.z = wantZ * baseSpeed + p.up.z * upVelDot;
+
+      if (p.autoFaceMovement) {
+        const moveMag = Math.hypot(wantX, wantZ);
+        if (moveMag > 0.05) {
+          const targetYaw = Math.atan2(wantX, wantZ);
+          let diff = targetYaw - p.rotation.y;
+          while (diff > Math.PI) diff -= Math.PI * 2;
+          while (diff < -Math.PI) diff += Math.PI * 2;
+          p.rotation.y += diff * Math.min(1, dt * 12);
+        }
       }
-    }
 
-    if (this.input.jump && p.onGround) {
-      const jp = p.jumpPower || 8;
-      p.velocity.x += p.up.x * jp;
-      p.velocity.y += p.up.y * jp;
-      p.velocity.z += p.up.z * jp;
-      p.onGround = false;
+      if (this.input.jump && p.onGround) {
+        const jp = p.jumpPower || 8;
+        p.velocity.x += p.up.x * jp;
+        p.velocity.y += p.up.y * jp;
+        p.velocity.z += p.up.z * jp;
+        p.onGround = false;
+      }
+    } else {
+      // Ragdolled: scrub horizontal control velocity so the body just falls.
+      p.velocity.x *= 1 - Math.min(1, dt * 2);
+      p.velocity.z *= 1 - Math.min(1, dt * 2);
     }
 
     p.velocity.x += gravityVec.x * dt;
@@ -1018,6 +1220,8 @@ export class GameRuntime {
 
     for (const o of this.objectList) {
       if (o.anchored || o.container !== "Workspace") continue;
+      // Skip motor-pinned objects — their position is driven by the rig.
+      if (this._motorPinnedIds.has(o.id)) continue;
       const og = this.computeGravityForTarget(o.position, o.id, o.name, false);
       o.velocity.x += og.x * dt;
       o.velocity.y += og.y * dt;
@@ -1036,14 +1240,36 @@ export class GameRuntime {
 
     this.runPickupSweep();
 
-    if (p.position.y < 1) {
-      p.position.y = 1;
-      if (p.velocity.y < 0) p.velocity.y = 0;
-      p.onGround = true;
-      const f = 1 - Math.min(1, 0.4 * 8 * dt);
-      p.velocity.x *= f;
-      p.velocity.z *= f;
-    } else if (p.position.y > 1.001) p.onGround = false;
+    // Apply motors AFTER physics so held objects snap to the rig regardless
+    // of where the underlying physics tried to move them.
+    this.applyMotors();
+
+    // Update animation hint based on motion + ground state. Scripts can
+    // override via player.motors.animation = "custom".
+    this.updatePlayerAnimation();
+
+    // Fall-out-of-world: if the player drops below killY, kill them.
+    if (!p.ragdoll && p.position.y < p.killY) {
+      p.kill();
+    }
+
+    // Once the ragdoll timer elapses, respawn automatically.
+    if (p.ragdoll && this.time >= this._ragdollUntil) {
+      p.respawn();
+    }
+
+    // Advance ragdoll limb positions/velocities purely visually; gravity only.
+    if (p.ragdoll && this._ragdollPos && this._ragdollVel) {
+      const g = -this.physics.gravity;
+      for (const k of Object.keys(this._ragdollPos)) {
+        const pos = this._ragdollPos[k];
+        const vel = this._ragdollVel[k];
+        vel.y += g * dt;
+        pos.x += vel.x * dt;
+        pos.y += vel.y * dt;
+        pos.z += vel.z * dt;
+      }
+    }
 
     this.runTouchSweep();
     resolveObjectCollisions(this.objectList);
@@ -1065,12 +1291,60 @@ export class GameRuntime {
 
     this.taskScheduler.step(this.time);
 
-    if (p.health <= 0 && (this as any)._lastHealth > 0) { this._events.emit("playerDied", [p], () => {}); p.respawn(); this._events.emit("playerSpawned", [p], () => {}); }
-    (this as any)._lastHealth = p.health;
-
     this.input.jump = false;
     this._prevKeys = { ...this.input.keys };
     this.buildApi(dt);
+  }
+
+  private get _motorPinnedIds(): Set<string> {
+    const s = new Set<string>();
+    for (const m of this.motorState.values()) s.add(m.obj.id);
+    return s;
+  }
+
+  /** Pin every motor-attached object to the player rig. */
+  private applyMotors() {
+    if (this.motorState.size === 0) return;
+    const p = this.player;
+    const cosY = Math.cos(p.rotation.y), sinY = Math.sin(p.rotation.y);
+    const slotOffsets: Record<string, Vec3> = {
+      rightHand: { x: 0.55, y: 0.1, z: 0.1 },
+      leftHand:  { x: -0.55, y: 0.1, z: 0.1 },
+      back:      { x: 0, y: 0.3, z: -0.35 },
+      head:      { x: 0, y: 0.95, z: 0 },
+      torso:     { x: 0, y: 0.2, z: 0 },
+    };
+    for (const [slot, m] of this.motorState) {
+      const base = slotOffsets[slot] ?? { x: 0, y: 0, z: 0 };
+      const lx = base.x + m.offset.x;
+      const ly = base.y + m.offset.y;
+      const lz = base.z + m.offset.z;
+      // Rotate offset by player yaw around up axis (assume world-up for now).
+      const wx = lx * cosY + lz * sinY;
+      const wz = -lx * sinY + lz * cosY;
+      m.obj.position.x = p.position.x + wx;
+      m.obj.position.y = p.position.y + ly;
+      m.obj.position.z = p.position.z + wz;
+      m.obj.rotation.x = m.rotation.x;
+      m.obj.rotation.y = p.rotation.y + m.rotation.y;
+      m.obj.rotation.z = m.rotation.z;
+      m.obj.velocity.x = 0; m.obj.velocity.y = 0; m.obj.velocity.z = 0;
+    }
+  }
+
+  private updatePlayerAnimation() {
+    const p = this.player;
+    if (p.ragdoll) { p.motors.animation = "ragdoll"; return; }
+    const horiz = Math.hypot(p.velocity.x, p.velocity.z);
+    if (!p.onGround) {
+      p.motors.animation = p.velocity.y > 0.5 ? "jump" : "fall";
+    } else if (horiz > (p.walkSpeed ?? 6) * 1.15) {
+      p.motors.animation = "run";
+    } else if (horiz > 0.3) {
+      p.motors.animation = "walk";
+    } else {
+      p.motors.animation = "idle";
+    }
   }
 
   private runTouchSweep() {

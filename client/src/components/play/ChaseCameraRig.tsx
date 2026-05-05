@@ -5,9 +5,15 @@ import * as THREE from "three";
 import { GameRuntime } from "@/lib/gameRuntime";
 
 /**
- * Follows the player and writes the camera's forward vector back into the
- * runtime so input becomes camera-relative. Track the player's "up" so the
- * camera tumbles with planetary gravity instead of floating off into world-up.
+ * Reads `runtime.camera` each frame and drives the Three camera accordingly.
+ * Supports four modes:
+ *   - thirdPerson : OrbitControls around the player at `camera.distance`.
+ *   - firstPerson : camera glued to the player head; OrbitControls disabled.
+ *   - free        : OrbitControls free orbit, target stays where user dragged.
+ *   - scripted    : reads `camera.position` / `camera.lookAt` directly.
+ *
+ * Always writes the resulting forward vector back to `runtime.cameraForward`
+ * so movement input stays camera-relative.
  */
 export default function ChaseCameraRig({ runtime }: { runtime: GameRuntime }) {
   const { camera } = useThree();
@@ -18,31 +24,59 @@ export default function ChaseCameraRig({ runtime }: { runtime: GameRuntime }) {
 
   useFrame(() => {
     const p = runtime.player;
-    const pos = new THREE.Vector3(p.position.x, p.position.y + 0.7, p.position.z);
+    const cfg = runtime.camera;
+    const head = new THREE.Vector3(
+      p.position.x + cfg.offset.x,
+      p.position.y + cfg.offset.y,
+      p.position.z + cfg.offset.z,
+    );
     const up = new THREE.Vector3(p.up.x, p.up.y, p.up.z).normalize();
 
     if (!initialized.current) {
-      lastPlayerPos.current.copy(pos);
+      lastPlayerPos.current.copy(head);
       lastUp.current.copy(up);
       initialized.current = true;
     }
 
-    const delta = pos.clone().sub(lastPlayerPos.current);
-    camera.position.add(delta);
-    lastPlayerPos.current.copy(pos);
-
-    if (!up.equals(lastUp.current)) {
-      const q = new THREE.Quaternion().setFromUnitVectors(lastUp.current, up);
-      const offset = camera.position.clone().sub(pos).applyQuaternion(q);
-      camera.position.copy(pos).add(offset);
-      lastUp.current.copy(up);
+    if ((camera as any).fov !== cfg.fov) {
+      (camera as any).fov = cfg.fov;
+      (camera as any).updateProjectionMatrix?.();
     }
 
-    camera.up.lerp(up, 0.15).normalize();
+    if (cfg.mode === "scripted") {
+      camera.position.set(cfg.position.x, cfg.position.y, cfg.position.z);
+      camera.up.lerp(up, 0.15).normalize();
+      camera.lookAt(cfg.lookAt.x, cfg.lookAt.y, cfg.lookAt.z);
+    } else if (cfg.mode === "firstPerson") {
+      camera.position.set(head.x, head.y, head.z);
+      camera.up.lerp(up, 0.15).normalize();
+      // Look forward along player yaw.
+      const yaw = p.rotation.y;
+      camera.lookAt(head.x + Math.sin(yaw), head.y, head.z + Math.cos(yaw));
+    } else {
+      // thirdPerson / free: chase by translating last frame's delta.
+      const delta = head.clone().sub(lastPlayerPos.current);
+      camera.position.add(delta);
+      lastPlayerPos.current.copy(head);
 
-    if (controlsRef.current) {
-      controlsRef.current.target.set(pos.x, pos.y, pos.z);
-      controlsRef.current.update();
+      if (!up.equals(lastUp.current)) {
+        const q = new THREE.Quaternion().setFromUnitVectors(lastUp.current, up);
+        const offset = camera.position.clone().sub(head).applyQuaternion(q);
+        camera.position.copy(head).add(offset);
+        lastUp.current.copy(up);
+      }
+      camera.up.lerp(up, 0.15).normalize();
+
+      if (controlsRef.current) {
+        const ctl = controlsRef.current;
+        ctl.target.set(head.x, head.y, head.z);
+        ctl.minDistance = cfg.minDistance;
+        ctl.maxDistance = cfg.maxDistance;
+        ctl.rotateSpeed = cfg.sensitivity;
+        ctl.enableRotate = !(cfg.lockYaw && cfg.lockPitch);
+        ctl.enabled = (cfg.mode as string) !== "firstPerson";
+        ctl.update();
+      }
     }
 
     const fwd = new THREE.Vector3();

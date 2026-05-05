@@ -93,6 +93,21 @@ export type PlayerInventory = {
   clear: () => void;
 };
 
+/**
+ * Slots ("motors") on the player rig where a held object can be attached.
+ * Setting a slot to a RuntimeObject pins it to the player every frame; setting
+ * it to `null` releases. Position offsets are local to the avatar.
+ */
+export type MotorSlot = "rightHand" | "leftHand" | "back" | "head" | "torso";
+
+export type PlayerMotors = {
+  attach: (slot: MotorSlot, obj: RuntimeObject | null, offset?: Vec3, rotation?: Vec3) => void;
+  detach: (slot: MotorSlot) => RuntimeObject | null;
+  get: (slot: MotorSlot) => RuntimeObject | null;
+  /** Animation name driving the rig. Built-in: "idle" | "walk" | "run" | "jump" | "fall". Scripts may set custom names. */
+  animation: string;
+};
+
 export type RuntimePlayer = {
   username: string;
   color: string;
@@ -103,16 +118,44 @@ export type RuntimePlayer = {
   health: number;
   maxHealth: number;
   speed: number;
+  walkSpeed: number;
+  runSpeed: number;
   jumpPower: number;
   size: number;
   spawnPoint: Vec3;
   up: Vec3;
   inventory: PlayerInventory;
+  motors: PlayerMotors;
   autoFaceMovement?: boolean;
+  /** While true the avatar renders as scattered limbs and movement is disabled. */
+  ragdoll: boolean;
+  /** Y world position below which the player auto-dies. Defaults to -50. */
+  killY: number;
   takeDamage: (n: number) => void;
   heal: (n: number) => void;
+  kill: () => void;
   teleport: (x: number, y: number, z: number) => void;
   respawn: () => void;
+};
+
+export type CameraMode = "thirdPerson" | "firstPerson" | "free" | "scripted";
+
+export type RuntimeCamera = {
+  mode: CameraMode;
+  /** Distance from player in thirdPerson mode. */
+  distance: number;
+  minDistance: number;
+  maxDistance: number;
+  /** Local offset from the player position the camera looks at. */
+  offset: Vec3;
+  /** Mouse / touch sensitivity multiplier. */
+  sensitivity: number;
+  lockYaw: boolean;
+  lockPitch: boolean;
+  /** When mode === "scripted" the camera reads these directly each frame. */
+  position: Vec3;
+  lookAt: Vec3;
+  fov: number;
 };
 
 export type RuntimeInput = {
@@ -250,6 +293,7 @@ export type GameAPI = {
   mouse: MouseAPI;
   world: WorldAPI;
   runService: RunServiceAPI;
+  camera: RuntimeCamera;
   time: number;
   dt: number;
   now: () => number;
@@ -307,7 +351,7 @@ export type GameAPI = {
   task: {
     wait: (seconds: number) => Promise<void>;
     delay: (seconds: number, callback: () => void) => () => void;
-    spawn: (fn: Function, ...args: any[]) => void;
+    spawn: (fn: (...args: any[]) => any, ...args: any[]) => void;
   };
   debug: {
     getChildren: (obj: RuntimeObject) => RuntimeObject[];
