@@ -12,8 +12,8 @@ import { GameRuntime, type RuntimePlayer } from "@/lib/gameRuntime";
  * limbs render at offsets read from `runtime._ragdollPos`.
  * 
  * The torso is a cylinder with slightly rounded top and bottom edges.
- * Shoulders are vertical capsules that bridge from the torso side to the arm,
- * creating a seamless connection.
+ * Shoulders are curved tubes that start at the torso side and curve outward
+ * and down into the arm, creating a natural shoulder contour.
  */
 export default function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRuntime }) {
   const anim = player.motors.animation;
@@ -29,14 +29,22 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const rag = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const off = (k: string) => (rag && rag[k] ? rag[k] : null);
 
-  // Shoulder positions (torso-relative)
+  // Shoulder curve attachment points (torso-relative)
+  const torsoSidePos = new THREE.Vector3(0.32, 0.33, 0);    // where curve starts on torso
+  const rightArmTop = new THREE.Vector3(0.42, 0.18, 0);     // where arm attaches
+  const leftArmTop = new THREE.Vector3(-0.42, 0.18, 0);
+  
+  // Control points for quadratic bezier – bulge outward
+  const rightCtrl = new THREE.Vector3(0.58, 0.33, 0);
+  const leftCtrl = new THREE.Vector3(-0.58, 0.33, 0);
+
+  // Arm default positions match the curve end points
+  const defaultRightArmPos = rightArmTop;
+  const defaultLeftArmPos = leftArmTop;
+  
+  // Shoulder joint positions (for arm rotation pivot)
   const rightShoulderPos = new THREE.Vector3(0.42, 0.38, 0);
   const leftShoulderPos = new THREE.Vector3(-0.42, 0.38, 0);
-  
-  // The arm attaches 0.2 units below the shoulder sphere (vertical bridge)
-  const armOffsetFromShoulder = new THREE.Vector3(0, -0.2, 0);
-  const defaultRightArmPos = rightShoulderPos.clone().add(armOffsetFromShoulder);
-  const defaultLeftArmPos = leftShoulderPos.clone().add(armOffsetFromShoulder);
   
   const rightArmLocalPos = defaultRightArmPos.clone().sub(rightShoulderPos);
   const leftArmLocalPos = defaultLeftArmPos.clone().sub(leftShoulderPos);
@@ -44,17 +52,18 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const ragRightArmPos = off("rightArm") ? new THREE.Vector3(off("rightArm")!.x, off("rightArm")!.y, off("rightArm")!.z) : null;
   const ragLeftArmPos = off("leftArm") ? new THREE.Vector3(off("leftArm")!.x, off("leftArm")!.y, off("leftArm")!.z) : null;
 
-  // Torso dimensions – the rounded caps are seamlessly attached to the cylinder ends
+  // Torso dimensions
   const torsoRadius = 0.32;
-  const torsoHeight = 0.7;           // straight cylinder part height
-  const capHeight = 0.135;            // how much the cap protrudes (slightly extended for better rounding)
-  const torsoTotalYCenter = 0.05;     // keep same center as before
+  const torsoHeight = 0.7;
+  const capHeight = 0.135;
+  const torsoTotalYCenter = 0.05;
 
-  // Bridge capsule dimensions – connects shoulder sphere position to arm top
-  const bridgeRadius = 0.11;
-  const bridgeHeight = 0.2; // distance from shoulder pos to arm start
-  const rightBridgeCenter = new THREE.Vector3(0.42, 0.28, 0);
-  const leftBridgeCenter = new THREE.Vector3(-0.42, 0.28, 0);
+  // Helper to create a curved tube along a quadratic bezier curve
+  const createCurvedShoulder = (start: THREE.Vector3, control: THREE.Vector3, end: THREE.Vector3, radius: number) => {
+    const curve = new THREE.QuadraticBezierCurve3(start, control, end);
+    const tubeGeometry = new THREE.TubeGeometry(curve, 20, radius, 8, false);
+    return <mesh geometry={tubeGeometry} castShadow receiveShadow />;
+  };
 
   return (
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
@@ -62,34 +71,23 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
         
         {/* TORSO – cylinder with integrated rounded ends */}
         <group position={off("torso") ? [off("torso")!.x, off("torso")!.y, off("torso")!.z] : [0, torsoTotalYCenter, 0]}>
-          {/* Main cylinder (its flat end caps are hidden by the spheres) */}
           <mesh castShadow position={[0, 0, 0]}>
             <cylinderGeometry args={[torsoRadius, torsoRadius, torsoHeight, 24, 16]} />
             <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
           </mesh>
           
-          {/* Top rounded cap – flattened sphere exactly at cylinder top */}
-          <mesh 
-            castShadow 
-            position={[0, torsoHeight / 2, 0]} 
-            scale={[1, capHeight / torsoRadius, 1]}
-          >
+          <mesh castShadow position={[0, torsoHeight / 2, 0]} scale={[1, capHeight / torsoRadius, 1]}>
             <sphereGeometry args={[torsoRadius, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2]} />
             <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
           </mesh>
           
-          {/* Bottom rounded cap – exactly at cylinder bottom */}
-          <mesh 
-            castShadow 
-            position={[0, -torsoHeight / 2, 0]} 
-            scale={[1, capHeight / torsoRadius, 1]}
-          >
+          <mesh castShadow position={[0, -torsoHeight / 2, 0]} scale={[1, capHeight / torsoRadius, 1]}>
             <sphereGeometry args={[torsoRadius, 24, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2]} />
             <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
           </mesh>
         </group>
 
-        {/* BELT (only when not ragdoll) */}
+        {/* BELT */}
         {!rag && (
           <mesh position={[0, -0.18, 0]} castShadow>
             <cylinderGeometry args={[0.34, 0.34, 0.08, 24]} />
@@ -97,13 +95,8 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </mesh>
         )}
 
-        {/* RIGHT SHOULDER – bridge capsule connecting torso to arm */}
-        {!rag && (
-          <mesh position={rightBridgeCenter} castShadow>
-            <capsuleGeometry args={[bridgeRadius, bridgeHeight, 8, 12]} />
-            <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
-          </mesh>
-        )}
+        {/* CURVED RIGHT SHOULDER (bridge from torso to arm) */}
+        {!rag && createCurvedShoulder(torsoSidePos, rightCtrl, rightArmTop, 0.1)}
 
         {/* RIGHT ARM */}
         {!rag ? (
@@ -132,12 +125,12 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           </group>
         )}
 
-        {/* LEFT SHOULDER – bridge capsule connecting torso to arm */}
-        {!rag && (
-          <mesh position={leftBridgeCenter} castShadow>
-            <capsuleGeometry args={[bridgeRadius, bridgeHeight, 8, 12]} />
-            <meshStandardMaterial color={player.color} roughness={0.55} metalness={0.05} />
-          </mesh>
+        {/* CURVED LEFT SHOULDER */}
+        {!rag && createCurvedShoulder(
+          new THREE.Vector3(-torsoSidePos.x, torsoSidePos.y, torsoSidePos.z), 
+          leftCtrl, 
+          leftArmTop, 
+          0.1
         )}
 
         {/* LEFT ARM */}
@@ -187,7 +180,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           <meshStandardMaterial color="#7a3e19" roughness={0.6} />
         </mesh>
         
-        {/* FACE (only when not ragdoll) */}
+        {/* FACE */}
         {!rag && (
           <>
             <mesh position={[0, 0.86, -0.02]} castShadow>
