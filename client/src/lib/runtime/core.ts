@@ -533,17 +533,58 @@ export class GameRuntime {
 
   private mountPlayerMethods() {
     const p = this.player;
-    p.takeDamage = (n: number) => { p.health = Math.max(0, p.health - n); if (p.health <= 0) p.respawn(); };
+    p.takeDamage = (n: number) => {
+      if (p.ragdoll) return;
+      p.health = Math.max(0, p.health - n);
+      if (p.health <= 0) p.kill();
+    };
     p.heal = (n: number) => { p.health = Math.min(p.maxHealth, p.health + n); };
-    p.teleport = (x: number, y: number, z: number) => { p.position.x = x; p.position.y = y; p.position.z = z; p.velocity.x = 0; p.velocity.y = 0; p.velocity.z = 0; };
-    p.respawn = () => { 
+    p.teleport = (x: number, y: number, z: number) => {
+      p.position.x = x; p.position.y = y; p.position.z = z;
+      p.velocity.x = 0; p.velocity.y = 0; p.velocity.z = 0;
+    };
+    p.kill = () => {
+      if (p.ragdoll) return;
+      p.health = 0;
+      p.ragdoll = true;
+      // Pre-seed limb velocities so the avatar visibly scatters before respawn.
+      this._ragdollVel = {
+        torso: { x: (Math.random() - 0.5) * 4, y: 5, z: (Math.random() - 0.5) * 4 },
+        head:  { x: (Math.random() - 0.5) * 6, y: 7, z: (Math.random() - 0.5) * 6 },
+        leftArm:  { x: -3 + Math.random() * 2, y: 5 + Math.random() * 2, z: (Math.random() - 0.5) * 4 },
+        rightArm: { x:  3 + Math.random() * 2, y: 5 + Math.random() * 2, z: (Math.random() - 0.5) * 4 },
+        leftLeg:  { x: (Math.random() - 0.5) * 4, y: 4 + Math.random() * 2, z: -3 + Math.random() * 2 },
+        rightLeg: { x: (Math.random() - 0.5) * 4, y: 4 + Math.random() * 2, z:  3 + Math.random() * 2 },
+      };
+      this._ragdollPos = {
+        torso: { x: 0, y: 0.05, z: 0 },
+        head:  { x: 0, y: 0.7, z: 0 },
+        leftArm: { x: -0.42, y: 0.18, z: 0 },
+        rightArm: { x: 0.42, y: 0.18, z: 0 },
+        leftLeg:  { x: -0.18, y: -0.45, z: 0 },
+        rightLeg: { x:  0.18, y: -0.45, z: 0 },
+      };
+      this._ragdollUntil = this.time + 1.6;
+      this._events.emit("playerDied", [p], () => {});
+      this.pushLog(`${p.username} died.`);
+    };
+    p.respawn = () => {
       const sp = p.spawnPoint;
       p.position.x = sp.x; p.position.y = sp.y; p.position.z = sp.z;
       p.velocity.x = 0; p.velocity.y = 0; p.velocity.z = 0;
       p.health = p.maxHealth;
+      p.ragdoll = false;
+      this._ragdollVel = null;
+      this._ragdollPos = null;
+      this._events.emit("playerSpawned", [p], () => {});
       this.pushLog(`${p.username} respawned.`);
     };
   }
+
+  /** Visible in Avatar.tsx — limb world offsets while ragdolling. */
+  _ragdollPos: Record<string, Vec3> | null = null;
+  private _ragdollVel: Record<string, Vec3> | null = null;
+  private _ragdollUntil = 0;
 
   private mountObjectEvents(raw: RuntimeObject): RuntimeObject {
     const id = raw.id;
