@@ -4,55 +4,29 @@ import { GameRuntime, type RuntimePlayer } from "@/lib/gameRuntime";
 import React, { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 
-/**
- * Among Us–style character with neck, head, and articulated arms & legs.
- * No backpack, no visor – just the bean body and limbs.
- * Feet correctly touch the ground.
- */
 export default function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRuntime }) {
-  // --- Materials (crewmate colors) ---
   const bodyColor = player.color;
-  const bodyMat = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.4, metalness: 0.05 }),
-    [bodyColor]
-  );
-  const neckMat = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.5 }),
-    [bodyColor]
-  );
-  const headMat = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.35 }),
-    [bodyColor]
-  );
-  const armMat = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.5 }),
-    [bodyColor]
-  );
-  const legMat = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.5 }),
-    [bodyColor]
-  );
+  const bodyMat = useMemo(() => new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.4, metalness: 0.05 }), [bodyColor]);
+  const neckMat = useMemo(() => new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.5 }), [bodyColor]);
+  const headMat = useMemo(() => new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.35 }), [bodyColor]);
+  const armMat = useMemo(() => new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.5 }), [bodyColor]);
+  const legMat = useMemo(() => new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.5 }), [bodyColor]);
 
-  // --- Geometries ---
-  // Body: stretched sphere (crewmate bean)
   const bodyGeo = useMemo(() => {
     const geo = new THREE.SphereGeometry(0.48, 32, 32);
     geo.scale(0.9, 1.2, 0.8);
     return geo;
   }, []);
-  // Neck: short cylinder
   const neckGeo = useMemo(() => new THREE.CylinderGeometry(0.22, 0.24, 0.12, 12), []);
-  // Head: round helmet (no visor)
   const headGeo = useMemo(() => {
     const geo = new THREE.SphereGeometry(0.38, 32, 32);
     geo.scale(0.95, 0.92, 0.9);
     return geo;
   }, []);
-  // Arms & legs
   const armGeo = useMemo(() => new THREE.CylinderGeometry(0.13, 0.1, 0.52, 8), []);
-  const legGeo = useMemo(() => new THREE.CylinderGeometry(0.16, 0.14, 0.55, 8), []);
+  // Longer legs: height 0.75 instead of 0.55
+  const legGeo = useMemo(() => new THREE.CylinderGeometry(0.16, 0.14, 0.75, 8), []);
 
-  // --- Animation state (same logic) ---
   const horiz = Math.hypot(player.velocity.x, player.velocity.z);
   const moveAmount = Math.min(1, horiz / Math.max(1, player.runSpeed || player.speed || 6));
   const animRaw = player.motors.animation || "idle";
@@ -66,7 +40,6 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     return animRaw === "idle" ? "walk" : animRaw;
   })();
 
-  // Refs for articulated limbs
   const bodyRef = useRef<THREE.Group>(null);
   const leftArmRef = useRef<THREE.Group>(null);
   const rightArmRef = useRef<THREE.Group>(null);
@@ -74,63 +47,35 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const rightLegRef = useRef<THREE.Group>(null);
   const headRef = useRef<THREE.Group>(null);
 
-  // Smoothing state
   const smooth = useRef({
-    bodyRotY: 0,
-    bodyRotZ: 0,
-    bodyY: 0,
-    leftArmRot: 0,
-    rightArmRot: 0,
-    leftLegRot: 0,
-    rightLegRot: 0,
-    headRotX: 0,
-    headRotY: 0,
+    bodyRotY: 0, bodyRotZ: 0, bodyY: 0,
+    leftArmRot: 0, rightArmRot: 0,
+    leftLegRot: 0, rightLegRot: 0,
+    headRotX: 0, headRotY: 0,
   });
 
   useFrame((_, delta) => {
     if (player.ragdoll) return;
     const t = runtime.time;
     const k = Math.min(1, delta * 14);
-
-    let bodyY = 0;
-    let bodyRotY = 0;
-    let bodyRotZ = 0;
-    let leftArm = 0;
-    let rightArm = 0;
-    let leftLeg = 0;
-    let rightLeg = 0;
-    let headX = 0;
-    let headY = 0;
+    let bodyY = 0, bodyRotY = 0, bodyRotZ = 0;
+    let leftArm = 0, rightArm = 0, leftLeg = 0, rightLeg = 0, headX = 0, headY = 0;
 
     if (anim === "jump") {
-      leftArm = -1.8;
-      rightArm = -1.8;
-      leftLeg = -0.3;
-      rightLeg = -0.3;
-      bodyY = -0.1;
-      headX = -0.2;
+      leftArm = -1.8; rightArm = -1.8; leftLeg = -0.3; rightLeg = -0.3;
+      bodyY = -0.1; headX = -0.2;
     } else if (anim === "fall") {
-      leftArm = 0.6;
-      rightArm = 0.6;
-      leftLeg = 0.2;
-      rightLeg = 0.2;
-      bodyRotZ = Math.sin(t * 3) * 0.1;
-      headX = 0.15;
+      leftArm = 0.6; rightArm = 0.6; leftLeg = 0.2; rightLeg = 0.2;
+      bodyRotZ = Math.sin(t * 3) * 0.1; headX = 0.15;
     } else if (anim === "hold") {
-      rightArm = -1.2;
-      leftArm = -0.2;
-      leftLeg = 0.1;
-      rightLeg = 0.3;
-      bodyY = Math.sin(t * 1.6) * 0.02;
-      bodyRotY = Math.sin(t * 1.3) * 0.03;
+      rightArm = -1.2; leftArm = -0.2; leftLeg = 0.1; rightLeg = 0.3;
+      bodyY = Math.sin(t * 1.6) * 0.02; bodyRotY = Math.sin(t * 1.3) * 0.03;
       if (horiz > 0.15) {
         const freq = horiz > (player.walkSpeed || 6) * 1.1 ? 11 : 7;
         const amp = horiz > (player.walkSpeed || 6) * 1.1 ? 0.9 : 0.5;
         const swing = Math.sin(t * freq) * amp * moveAmount;
-        leftArm = swing * 0.8;
-        rightArm = -swing * 0.8;
-        leftLeg = -rightArm * 0.7;
-        rightLeg = -leftArm * 0.7;
+        leftArm = swing * 0.8; rightArm = -swing * 0.8;
+        leftLeg = -rightArm * 0.7; rightLeg = -leftArm * 0.7;
       }
     } else if (anim === "walk" || anim === "run") {
       const isRun = anim === "run";
@@ -140,29 +85,20 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
       const motion = Math.max(0.35, moveAmount);
       const phase = t * freq;
       const armSwing = Math.sin(phase) * armAmp * motion;
-      leftArm = armSwing;
-      rightArm = -armSwing;
-      leftLeg = -rightArm * legAmp;
-      rightLeg = -leftArm * legAmp;
+      leftArm = armSwing; rightArm = -armSwing;
+      leftLeg = -rightArm * legAmp; rightLeg = -leftArm * legAmp;
       bodyY = Math.abs(Math.sin(phase)) * (isRun ? 0.08 : 0.04) * motion;
       bodyRotY = Math.sin(phase) * 0.1 * motion;
       bodyRotZ = Math.sin(phase) * 0.05 * motion;
-      headX = Math.sin(phase * 2) * 0.02;
-      headY = Math.sin(phase) * 0.03;
+      headX = Math.sin(phase * 2) * 0.02; headY = Math.sin(phase) * 0.03;
     } else {
-      // Idle
       const breath = Math.sin(t * 1.6) * 0.03;
-      bodyY = breath * 0.5;
-      bodyRotY = Math.sin(t * 0.9) * 0.04;
-      leftArm = 0.1 + Math.sin(t * 1.2) * 0.08;
-      rightArm = 0.1 - Math.sin(t * 1.2) * 0.08;
-      leftLeg = 0.05 + Math.sin(t * 1.2) * 0.05;
-      rightLeg = 0.05 - Math.sin(t * 1.2) * 0.05;
-      headX = Math.sin(t * 1.1) * 0.02;
-      headY = Math.sin(t * 0.7) * 0.01;
+      bodyY = breath * 0.5; bodyRotY = Math.sin(t * 0.9) * 0.04;
+      leftArm = 0.1 + Math.sin(t * 1.2) * 0.08; rightArm = 0.1 - Math.sin(t * 1.2) * 0.08;
+      leftLeg = 0.05 + Math.sin(t * 1.2) * 0.05; rightLeg = 0.05 - Math.sin(t * 1.2) * 0.05;
+      headX = Math.sin(t * 1.1) * 0.02; headY = Math.sin(t * 0.7) * 0.01;
     }
 
-    // Smooth
     const s = smooth.current;
     s.bodyY += (bodyY - s.bodyY) * k;
     s.bodyRotY += (bodyRotY - s.bodyRotY) * k;
@@ -174,7 +110,6 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     s.headRotX += (headX - s.headRotX) * k;
     s.headRotY += (headY - s.headRotY) * k;
 
-    // Apply
     if (bodyRef.current) {
       bodyRef.current.position.y = s.bodyY;
       bodyRef.current.rotation.y = s.bodyRotY;
@@ -190,13 +125,11 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     }
   });
 
-  // --- Positioning & orientation ---
   const ragPos = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const up = new THREE.Vector3(player.up.x, player.up.y, player.up.z).normalize();
   const orientQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
-  // Adjusted lift so feet touch ground: lowest point = legGroupY (-0.52) + legBottom (-0.27 - 0.275 = -0.545) = -1.065 relative to body origin.
-  // Setting lift = 1.07 makes feet at y ≈ 0.005, just above ground.
-  const RIG_LIFT = 1.07;
+  // New lift so feet touch ground: leg bottom = -0.93 (calculated from new leg length & positions)
+  const RIG_LIFT = 0.93;
 
   return (
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
@@ -211,17 +144,11 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
         ) : (
           <group position={[0, RIG_LIFT, 0]}>
             <group ref={bodyRef}>
-              {/* Body (bean) */}
               <mesh geometry={bodyGeo} material={bodyMat} castShadow receiveShadow />
-
-              {/* Neck */}
               <mesh geometry={neckGeo} material={neckMat} position={[0, 0.62, 0]} castShadow />
-
-              {/* Head (no visor) */}
               <group ref={headRef} position={[0, 0.78, 0]}>
                 <mesh geometry={headGeo} material={headMat} castShadow />
               </group>
-
               {/* Arms */}
               <group ref={leftArmRef} position={[-0.55, 0.25, 0]}>
                 <mesh geometry={armGeo} material={armMat} position={[0, -0.28, 0]} castShadow />
@@ -229,17 +156,14 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
               <group ref={rightArmRef} position={[0.55, 0.25, 0]}>
                 <mesh geometry={armGeo} material={armMat} position={[0, -0.28, 0]} castShadow />
               </group>
-
-              {/* Legs */}
-              <group ref={leftLegRef} position={[-0.35, -0.52, 0]}>
-                <mesh geometry={legGeo} material={legMat} position={[0, -0.27, 0]} castShadow />
+              {/* Legs - longer and lowered */}
+              <group ref={leftLegRef} position={[-0.35, -0.48, 0]}>
+                <mesh geometry={legGeo} material={legMat} position={[0, -0.1, 0]} castShadow />
               </group>
-              <group ref={rightLegRef} position={[0.35, -0.52, 0]}>
-                <mesh geometry={legGeo} material={legMat} position={[0, -0.27, 0]} castShadow />
+              <group ref={rightLegRef} position={[0.35, -0.48, 0]}>
+                <mesh geometry={legGeo} material={legMat} position={[0, -0.1, 0]} castShadow />
               </group>
             </group>
-
-            {/* Name tag */}
             <Html position={[0, 1.45, 0]} center distanceFactor={8} zIndexRange={[100, 0]} sprite>
               <div className="px-2 py-0.5 rounded-md bg-black/70 text-white text-xs font-medium whitespace-nowrap pointer-events-none">
                 {player.username}
@@ -252,19 +176,8 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   );
 }
 
-// --- Ragdoll version (no visor, no backpack) ---
-function RagdollCrewmate({
-  ragPos,
-  geos,
-  mats,
-  lift,
-}: {
-  ragPos: Record<string, { x: number; y: number; z: number }>;
-  geos: any;
-  mats: any;
-  lift: number;
-}) {
-  const at = (k: string, fb: [number, number, number]): [number, number, number] => {
+function RagdollCrewmate({ ragPos, geos, mats, lift }: any) {
+  const at = (k: string, fb: [number, number, number]) => {
     const p = ragPos[k];
     return p ? [p.x, p.y + lift, p.z] : [fb[0], fb[1] + lift, fb[2]];
   };
@@ -275,8 +188,8 @@ function RagdollCrewmate({
       <mesh geometry={geos.headGeo} material={mats.headMat} position={at("head", [0, 0.78, 0])} castShadow />
       <mesh geometry={geos.armGeo} material={mats.armMat} position={at("leftArm", [-0.55, 0.25, 0])} castShadow />
       <mesh geometry={geos.armGeo} material={mats.armMat} position={at("rightArm", [0.55, 0.25, 0])} castShadow />
-      <mesh geometry={geos.legGeo} material={mats.legMat} position={at("leftLeg", [-0.35, -0.52, 0])} castShadow />
-      <mesh geometry={geos.legGeo} material={mats.legMat} position={at("rightLeg", [0.35, -0.52, 0])} castShadow />
+      <mesh geometry={geos.legGeo} material={mats.legMat} position={at("leftLeg", [-0.35, -0.48, 0])} castShadow />
+      <mesh geometry={geos.legGeo} material={mats.legMat} position={at("rightLeg", [0.35, -0.48, 0])} castShadow />
     </group>
   );
 }
