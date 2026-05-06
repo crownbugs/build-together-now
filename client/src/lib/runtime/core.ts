@@ -548,21 +548,41 @@ export class GameRuntime {
       p.health = 0;
       p.ragdoll = true;
       // Pre-seed limb velocities so the avatar visibly scatters before respawn.
+      const r = () => (Math.random() - 0.5) * 4;
+      const ru = () => 4 + Math.random() * 3;
       this._ragdollVel = {
-        torso: { x: (Math.random() - 0.5) * 4, y: 5, z: (Math.random() - 0.5) * 4 },
-        head:  { x: (Math.random() - 0.5) * 6, y: 7, z: (Math.random() - 0.5) * 6 },
-        leftArm:  { x: -3 + Math.random() * 2, y: 5 + Math.random() * 2, z: (Math.random() - 0.5) * 4 },
-        rightArm: { x:  3 + Math.random() * 2, y: 5 + Math.random() * 2, z: (Math.random() - 0.5) * 4 },
-        leftLeg:  { x: (Math.random() - 0.5) * 4, y: 4 + Math.random() * 2, z: -3 + Math.random() * 2 },
-        rightLeg: { x: (Math.random() - 0.5) * 4, y: 4 + Math.random() * 2, z:  3 + Math.random() * 2 },
+        torso:        { x: r(), y: 5, z: r() },
+        head:         { x: r(), y: 7, z: r() },
+        neck:         { x: r(), y: 6, z: r() },
+        leftUpperArm: { x: -3, y: ru(), z: r() },
+        leftLowerArm: { x: -4, y: ru(), z: r() },
+        leftHand:     { x: -5, y: ru(), z: r() },
+        rightUpperArm:{ x:  3, y: ru(), z: r() },
+        rightLowerArm:{ x:  4, y: ru(), z: r() },
+        rightHand:    { x:  5, y: ru(), z: r() },
+        leftUpperLeg: { x: r(), y: ru(), z: -3 },
+        leftLowerLeg: { x: r(), y: ru(), z: -4 },
+        leftFoot:     { x: r(), y: ru(), z: -5 },
+        rightUpperLeg:{ x: r(), y: ru(), z:  3 },
+        rightLowerLeg:{ x: r(), y: ru(), z:  4 },
+        rightFoot:    { x: r(), y: ru(), z:  5 },
       };
       this._ragdollPos = {
-        torso: { x: 0, y: 0.05, z: 0 },
-        head:  { x: 0, y: 0.7, z: 0 },
-        leftArm: { x: -0.42, y: 0.18, z: 0 },
-        rightArm: { x: 0.42, y: 0.18, z: 0 },
-        leftLeg:  { x: -0.18, y: -0.45, z: 0 },
-        rightLeg: { x:  0.18, y: -0.45, z: 0 },
+        torso:        { x: 0, y: 0.05, z: 0 },
+        head:         { x: 0, y: 0.85, z: 0 },
+        neck:         { x: 0, y: 0.65, z: 0 },
+        leftUpperArm: { x: -0.42, y: 0.30, z: 0 },
+        leftLowerArm: { x: -0.42, y: 0.00, z: 0 },
+        leftHand:     { x: -0.42, y: -0.25, z: 0 },
+        rightUpperArm:{ x:  0.42, y: 0.30, z: 0 },
+        rightLowerArm:{ x:  0.42, y: 0.00, z: 0 },
+        rightHand:    { x:  0.42, y: -0.25, z: 0 },
+        leftUpperLeg: { x: -0.18, y: -0.30, z: 0 },
+        leftLowerLeg: { x: -0.18, y: -0.65, z: 0 },
+        leftFoot:     { x: -0.18, y: -0.95, z: 0.05 },
+        rightUpperLeg:{ x:  0.18, y: -0.30, z: 0 },
+        rightLowerLeg:{ x:  0.18, y: -0.65, z: 0 },
+        rightFoot:    { x:  0.18, y: -0.95, z: 0.05 },
       };
       this._ragdollUntil = this.time + 1.6;
       this._events.emit("playerDied", [p], () => {});
