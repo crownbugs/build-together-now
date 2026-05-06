@@ -24,8 +24,8 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     return geo;
   }, []);
   const armGeo = useMemo(() => new THREE.CylinderGeometry(0.13, 0.1, 0.52, 8), []);
-  // Longer legs: height 0.75 instead of 0.55
-  const legGeo = useMemo(() => new THREE.CylinderGeometry(0.16, 0.14, 0.75, 8), []);
+  // Even longer legs (lower leg) – height 0.95
+  const legGeo = useMemo(() => new THREE.CylinderGeometry(0.16, 0.14, 0.95, 8), []);
 
   const horiz = Math.hypot(player.velocity.x, player.velocity.z);
   const moveAmount = Math.min(1, horiz / Math.max(1, player.runSpeed || player.speed || 6));
@@ -128,8 +128,9 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const ragPos = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const up = new THREE.Vector3(player.up.x, player.up.y, player.up.z).normalize();
   const orientQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
-  // New lift so feet touch ground: leg bottom = -0.93 (calculated from new leg length & positions)
-  const RIG_LIFT = 0.93;
+  // Adjusted lift so feet touch ground: bottom of leg = -0.55 (group) + -0.25 (mesh offset) + -0.475 (half of 0.95) = -1.275
+  // Lift = 1.275 to put feet at y≈0
+  const RIG_LIFT = 1.275;
 
   return (
     <group position={[player.position.x, player.position.y, player.position.z]} quaternion={orientQuat}>
@@ -156,12 +157,12 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
               <group ref={rightArmRef} position={[0.55, 0.25, 0]}>
                 <mesh geometry={armGeo} material={armMat} position={[0, -0.28, 0]} castShadow />
               </group>
-              {/* Legs - longer and lowered */}
-              <group ref={leftLegRef} position={[-0.35, -0.48, 0]}>
-                <mesh geometry={legGeo} material={legMat} position={[0, -0.1, 0]} castShadow />
+              {/* Extended lower legs */}
+              <group ref={leftLegRef} position={[-0.35, -0.55, 0]}>
+                <mesh geometry={legGeo} material={legMat} position={[0, -0.25, 0]} castShadow />
               </group>
-              <group ref={rightLegRef} position={[0.35, -0.48, 0]}>
-                <mesh geometry={legGeo} material={legMat} position={[0, -0.1, 0]} castShadow />
+              <group ref={rightLegRef} position={[0.35, -0.55, 0]}>
+                <mesh geometry={legGeo} material={legMat} position={[0, -0.25, 0]} castShadow />
               </group>
             </group>
             <Html position={[0, 1.45, 0]} center distanceFactor={8} zIndexRange={[100, 0]} sprite>
@@ -188,8 +189,8 @@ function RagdollCrewmate({ ragPos, geos, mats, lift }: any) {
       <mesh geometry={geos.headGeo} material={mats.headMat} position={at("head", [0, 0.78, 0])} castShadow />
       <mesh geometry={geos.armGeo} material={mats.armMat} position={at("leftArm", [-0.55, 0.25, 0])} castShadow />
       <mesh geometry={geos.armGeo} material={mats.armMat} position={at("rightArm", [0.55, 0.25, 0])} castShadow />
-      <mesh geometry={geos.legGeo} material={mats.legMat} position={at("leftLeg", [-0.35, -0.48, 0])} castShadow />
-      <mesh geometry={geos.legGeo} material={mats.legMat} position={at("rightLeg", [0.35, -0.48, 0])} castShadow />
+      <mesh geometry={geos.legGeo} material={mats.legMat} position={at("leftLeg", [-0.35, -0.55, 0])} castShadow />
+      <mesh geometry={geos.legGeo} material={mats.legMat} position={at("rightLeg", [0.35, -0.55, 0])} castShadow />
     </group>
   );
 }
