@@ -31,7 +31,7 @@ export default function Games() {
               <div className="w-8 h-8 rounded-md bg-primary flex items-center justify-center">
                 <Gamepad2 className="w-5 h-5 text-primary-foreground" />
               </div>
-              <span className="text-xl font-semibold">PyGame Engine</span>
+              <span className="text-xl font-semibold">Rebur Engine</span>
             </div>
           </div>
           {!isAuthenticated && (
@@ -50,7 +50,7 @@ export default function Games() {
         <div className="mb-8">
           <h1 className="text-3xl font-bold mb-2">Browse Games</h1>
           <p className="text-muted-foreground">
-            Discover games created by the community with Python & AI
+            Discover games created by the community with Rebur Engine
           </p>
         </div>
 

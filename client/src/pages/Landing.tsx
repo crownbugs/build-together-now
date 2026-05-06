@@ -19,7 +19,7 @@ export default function Landing() {
             <div className="w-8 h-8 rounded-md bg-primary flex items-center justify-center">
               <Code2 className="w-5 h-5 text-primary-foreground" />
             </div>
-            <span className="text-xl font-semibold">PyGame Engine</span>
+            <span className="text-xl font-semibold">Rebur Engine</span>
           </div>
           <Link href="/auth">
             <Button
@@ -44,10 +44,10 @@ export default function Landing() {
         <div className="container mx-auto px-6 relative z-10">
           <div className="max-w-4xl mx-auto text-center">
             <h1 className="text-5xl md:text-7xl font-bold mb-6 bg-gradient-to-r from-primary via-blue-400 to-primary bg-clip-text text-transparent">
-              Build Games with Python & AI
+              Build Games with Rebur Engine
             </h1>
             <p className="text-xl md:text-2xl text-muted-foreground mb-8 max-w-2xl mx-auto">
-              Create 2D and 3D games using Python for ML-powered game logic. Build intelligent NPCs, simulations, and experiments in your browser.
+              Create immersive 3D games with the Rebur Engine. Build intelligent NPCs, multiplayer worlds, and rich interactive experiences right in your browser.
             </p>
             <div className="flex gap-4 justify-center">
               <Link href="/auth">
@@ -77,16 +77,16 @@ export default function Landing() {
       <section id="features" className="py-20 bg-card/30">
         <div className="container mx-auto px-6">
           <h2 className="text-3xl md:text-4xl font-bold text-center mb-12">
-            Everything You Need to Create AI-Powered Games
+            Everything You Need to Create Great Games
           </h2>
           <div className="grid md:grid-cols-3 gap-8 max-w-6xl mx-auto">
             <div className="bg-card border border-card-border rounded-md p-6 hover-elevate">
               <div className="w-12 h-12 rounded-md bg-primary/10 flex items-center justify-center mb-4">
                 <Code2 className="w-6 h-6 text-primary" />
               </div>
-              <h3 className="text-xl font-semibold mb-3">Python Scripting</h3>
+              <h3 className="text-xl font-semibold mb-3">TypeScript Scripting</h3>
               <p className="text-muted-foreground">
-                Write game logic, AI behaviors, and ML models using Python. Perfect for AI-driven NPCs, pattern recognition, and intelligent simulations.
+                Write game logic with familiar TypeScript. Drive NPCs, animations, and gameplay through the Rebur Engine's powerful scripting API.
               </p>
             </div>
 
@@ -137,9 +137,9 @@ export default function Landing() {
                 2
               </div>
               <div>
-                <h3 className="text-xl font-semibold mb-2">Write Python Logic</h3>
+                <h3 className="text-xl font-semibold mb-2">Write Game Logic</h3>
                 <p className="text-muted-foreground">
-                  Add intelligence with Python scripts. Create AI behaviors, implement ML models, or build complex game mechanics with familiar Python syntax.
+                  Add behavior with TypeScript scripts. Build AI, mechanics, and animations using the Rebur Engine's clean, well-documented API.
                 </p>
               </div>
             </div>
@@ -168,7 +168,7 @@ export default function Landing() {
               Ready to Build Something Amazing?
             </h2>
             <p className="text-xl text-muted-foreground mb-8">
-              Join thousands of creators building AI-powered games with Python
+              Join thousands of creators building immersive games with Rebur Engine
             </p>
             <Link href="/auth">
               <Button
@@ -186,7 +186,7 @@ export default function Landing() {
       {/* Footer */}
       <footer className="border-t border-border py-8 bg-card/20">
         <div className="container mx-auto px-6 text-center text-sm text-muted-foreground">
-          <p>&copy; 2025 PyGame Engine. Build games with Python & AI.</p>
+          <p>&copy; 2025 Rebur Engine. Build games for everyone.</p>
         </div>
       </footer>
     </div>

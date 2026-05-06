@@ -23,7 +23,7 @@ import type {
 // v2 — schema reshape (Roblox-style service names: Workspace, Lighting,
 // Players, ServerScriptService, StarterPlayer, ReplicatedStorage). Bumping
 // the key wipes any v1 worlds since we explicitly dropped backwards compat.
-const LS_KEY = "pygame-engine:store:v3";
+const LS_KEY = "rebur-engine:store:v3";
 
 type DB = {
   users: Record<string, User>;

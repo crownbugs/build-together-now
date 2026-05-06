@@ -81,7 +81,7 @@ export default function Dashboard() {
                 <div className="w-8 h-8 rounded-md bg-primary flex items-center justify-center">
                   <Gamepad2 className="w-5 h-5 text-primary-foreground" />
                 </div>
-                <span className="text-xl font-semibold">PyGame Engine</span>
+                <span className="text-xl font-semibold">Rebur Engine</span>
               </Link>
             <nav className="flex gap-4">
               <Link href="/dashboard" className="text-sm text-foreground hover-elevate px-3 py-2 rounded-md" data-testid="link-dashboard">
@@ -192,7 +192,7 @@ export default function Dashboard() {
             <Gamepad2 className="w-16 h-16 text-muted-foreground/50 mx-auto mb-4" />
             <h3 className="text-xl font-semibold mb-2">No games yet</h3>
             <p className="text-muted-foreground mb-6">
-              Create your first game to get started building with Python & AI
+              Create your first game to get started building with Rebur Engine
             </p>
             <Button onClick={() => setCreateDialogOpen(true)} data-testid="button-create-first-game">
               <Plus className="w-5 h-5 mr-2" />

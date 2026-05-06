@@ -49,7 +49,7 @@ export default function AuthPage() {
               <Code2 className="w-8 h-8 text-primary-foreground" />
             </div>
           </div>
-          <CardTitle className="text-2xl font-bold">Welcome to PyGame Engine</CardTitle>
+          <CardTitle className="text-2xl font-bold">Welcome to Rebur Engine</CardTitle>
           <CardDescription>Login with test / pass123</CardDescription>
         </CardHeader>
         <CardContent>
