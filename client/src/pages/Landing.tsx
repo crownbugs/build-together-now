@@ -19,7 +19,7 @@ export default function Landing() {
             <div className="w-8 h-8 rounded-md bg-primary flex items-center justify-center">
               <Code2 className="w-5 h-5 text-primary-foreground" />
             </div>
-            <span className="text-xl font-semibold">PyGame Engine</span>
+            <span className="text-xl font-semibold">Rebur Engine</span>
           </div>
           <Link href="/auth">
             <Button
@@ -186,7 +186,7 @@ export default function Landing() {
       {/* Footer */}
       <footer className="border-t border-border py-8 bg-card/20">
         <div className="container mx-auto px-6 text-center text-sm text-muted-foreground">
-          <p>&copy; 2025 PyGame Engine. Build games with Python & AI.</p>
+          <p>&copy; 2025 Rebur Engine. Build games with Python & AI.</p>
         </div>
       </footer>
     </div>
