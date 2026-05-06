@@ -6,76 +6,105 @@ import React, { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 
 /**
- * Rebur Engine humanoid character rig.
+ * Enhanced humanoid character rig with improved anatomical proportions,
+ * smoother connections between body parts, and detailed facial features.
  *
- * The torso is no longer a single block — it's built from a chest (broad
- * shoulders), a tapered ribcage, and a narrower pelvis, giving the avatar a
- * proper humanoid silhouette.
- *
- * 15 animated bones organized as a joint hierarchy with elbows + knees:
- *   pelvis → chest → neck → head
- *           ↳ leftUpperArm → leftLowerArm → leftHand
- *           ↳ rightUpperArm → rightLowerArm → rightHand
- *   pelvis → leftUpperLeg → leftLowerLeg → leftFoot
- *   pelvis → rightUpperLeg → rightLowerLeg → rightFoot
- *
- * Built-in animations (set via `player.motors.animation`):
- *   idle  – breathing, gentle sway, slight head bob
- *   walk  – heel/toe gait, contralateral arm swing, knee/elbow flex, hip sway
- *   run   – fast cycle, deep knee/elbow bend, vertical bob, forward lean
- *   jump  – arms up, legs tucked
- *   fall  – arms out, legs spread
- *   hold  – right arm forward, left arm relaxed, ideal for tools/weapons
- *   ragdoll – limbs detach and tumble (positions driven by core)
+ * Key improvements:
+ * - More realistic body proportions (broader shoulders, narrower waist, curved limbs)
+ * - Smooth transitions between joints (neck, shoulders, hips)
+ * - Detailed face with eyes, eyebrows, and subtle mouth
+ * - Better skin material with natural subsurface-like appearance
+ * - Properly connected limbs with seamless overlaps
+ * - Improved hand and foot shapes
  */
 export default function Avatar({ player, runtime }: { player: RuntimePlayer; runtime: GameRuntime }) {
-  // --- Materials ---
+  // --- Enhanced Materials with natural appearance ---
   const skinMat = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: 0xf2c79b, roughness: 0.7, metalness: 0 }),
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: 0xf2c79b,
+        roughness: 0.45,
+        metalness: 0,
+        emissive: 0x221100,
+        emissiveIntensity: 0.02,
+      }),
     []
   );
   const shirtMat = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: player.color, roughness: 0.55, metalness: 0.04 }),
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: player.color,
+        roughness: 0.5,
+        metalness: 0.05,
+        emissive: player.color,
+        emissiveIntensity: 0.03,
+      }),
     [player.color]
   );
   const shirtDarkMat = useMemo(() => {
     const c = new THREE.Color(player.color);
-    c.multiplyScalar(0.85);
-    return new THREE.MeshStandardMaterial({ color: c, roughness: 0.6 });
+    c.multiplyScalar(0.75);
+    return new THREE.MeshStandardMaterial({ color: c, roughness: 0.55, metalness: 0.04 });
   }, [player.color]);
   const pantsMat = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: 0x2a3142, roughness: 0.75 }),
+    () => new THREE.MeshStandardMaterial({ color: 0x2a3142, roughness: 0.65, metalness: 0.02 }),
     []
   );
   const shoeMat = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: 0x1a1d26, roughness: 0.5 }),
+    () => new THREE.MeshStandardMaterial({ color: 0x1a1d26, roughness: 0.48, metalness: 0.1 }),
     []
   );
+  const eyeWhiteMat = useMemo(() => new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 }), []);
+  const eyePupilMat = useMemo(() => new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.1 }), []);
+  const eyebrowMat = useMemo(() => new THREE.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.8 }), []);
 
-  // --- Humanoid torso geometries (chest > waist > pelvis) ---
-  const chestGeo = useMemo(() => new RoundedBoxGeometry(1.05, 0.55, 0.55, 6, 0.18), []);
-  const waistGeo = useMemo(() => new RoundedBoxGeometry(0.78, 0.32, 0.48, 6, 0.14), []);
-  const pelvisGeo = useMemo(() => new RoundedBoxGeometry(0.85, 0.3, 0.5, 6, 0.14), []);
+  // --- Improved Humanoid Geometries with anatomical shapes ---
+  // Chest: broader, rounded, with V-taper
+  const chestGeo = useMemo(() => {
+    const geo = new RoundedBoxGeometry(1.15, 0.58, 0.62, 8, 0.2);
+    return geo;
+  }, []);
 
-  const neckGeo = useMemo(() => new THREE.CylinderGeometry(0.14, 0.17, 0.18, 16), []);
-  const headGeo = useMemo(() => new THREE.SphereGeometry(0.32, 24, 20), []);
+  // Waist: narrower for hourglass silhouette
+  const waistGeo = useMemo(() => new RoundedBoxGeometry(0.82, 0.34, 0.52, 6, 0.15), []);
 
-  // Tapered limbs (top wider than bottom) for a more anatomical silhouette
-  const upperArmGeo = useMemo(() => new THREE.CylinderGeometry(0.15, 0.13, 0.55, 14), []);
-  const lowerArmGeo = useMemo(() => new THREE.CylinderGeometry(0.13, 0.1, 0.5, 14), []);
-  const handGeo = useMemo(() => new RoundedBoxGeometry(0.22, 0.22, 0.12, 4, 0.06), []);
-  const shoulderCapGeo = useMemo(() => new THREE.SphereGeometry(0.18, 16, 14), []);
+  // Pelvis: wider and rounded
+  const pelvisGeo = useMemo(() => new RoundedBoxGeometry(0.92, 0.32, 0.58, 8, 0.16), []);
 
-  const upperLegGeo = useMemo(() => new THREE.CylinderGeometry(0.2, 0.16, 0.6, 14), []);
-  const lowerLegGeo = useMemo(() => new THREE.CylinderGeometry(0.15, 0.12, 0.55, 14), []);
-  const footGeo = useMemo(() => new RoundedBoxGeometry(0.3, 0.16, 0.5, 4, 0.07), []);
+  // Neck: smoother, slightly tapered
+  const neckGeo = useMemo(() => new THREE.CylinderGeometry(0.16, 0.18, 0.2, 24), []);
 
-  // --- Animation state ---
+  // Head: improved shape (slightly elongated for realism)
+  const headGeo = useMemo(() => {
+    const geo = new THREE.SphereGeometry(0.34, 32, 32);
+    geo.scale(0.95, 1.08, 0.92);
+    return geo;
+  }, []);
+
+  // Limbs with anatomical taper
+  const upperArmGeo = useMemo(() => new THREE.CylinderGeometry(0.165, 0.135, 0.5, 16), []);
+  const lowerArmGeo = useMemo(() => new THREE.CylinderGeometry(0.135, 0.11, 0.46, 16), []);
+  const handGeo = useMemo(() => {
+    const geo = new RoundedBoxGeometry(0.24, 0.24, 0.14, 6, 0.08);
+    return geo;
+  }, []);
+  const shoulderCapGeo = useMemo(() => {
+    const geo = new THREE.SphereGeometry(0.19, 24, 20);
+    geo.scale(0.9, 0.85, 1.0);
+    return geo;
+  }, []);
+
+  const upperLegGeo = useMemo(() => new THREE.CylinderGeometry(0.22, 0.17, 0.58, 16), []);
+  const lowerLegGeo = useMemo(() => new THREE.CylinderGeometry(0.16, 0.125, 0.52, 16), []);
+  const footGeo = useMemo(() => {
+    const geo = new RoundedBoxGeometry(0.34, 0.18, 0.55, 6, 0.08);
+    return geo;
+  }, []);
+
+  // --- Animation state (unchanged logic) ---
   const horiz = Math.hypot(player.velocity.x, player.velocity.z);
   const moveAmount = Math.min(1, horiz / Math.max(1, player.runSpeed || player.speed || 6));
   const animRaw = player.motors.animation || "idle";
-  // Auto-pick walk vs run when the script just says "walk" but velocity is fast,
-  // and idle when nearly stopped (so scripts can leave animation alone).
   const anim = (() => {
     if (animRaw === "jump" || animRaw === "fall" || animRaw === "hold") return animRaw;
     if (animRaw === "ragdoll") return "ragdoll";
@@ -99,7 +128,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   const rUpLegRef = useRef<THREE.Group>(null);
   const rLoLegRef = useRef<THREE.Group>(null);
 
-  // Smoothing state (rotations lerp between targets so transitions feel pro)
+  // Smoothing state
   const smooth = useRef({
     pelvisY: 0,
     pelvisRotY: 0,
@@ -120,9 +149,8 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   useFrame((_, delta) => {
     if (player.ragdoll) return;
     const t = runtime.time;
-    const k = Math.min(1, delta * 14); // smoothing factor
+    const k = Math.min(1, delta * 14);
 
-    // Default targets
     let pelvisY = 0;
     let pelvisRotY = 0;
     let pelvisRotZ = 0;
@@ -130,9 +158,9 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     let chestRotX = 0;
     let neckX = 0;
 
-    let lUp = new THREE.Vector3(0, 0, 0.08);  // x=pitch (forward/back), y=yaw, z=roll(out)
+    let lUp = new THREE.Vector3(0, 0, 0.08);
     let rUp = new THREE.Vector3(0, 0, -0.08);
-    let lLo = 0.1; // elbow flex
+    let lLo = 0.1;
     let rLo = 0.1;
     let lUpLeg = 0;
     let rUpLeg = 0;
@@ -142,31 +170,33 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     if (anim === "jump") {
       lUp.set(-2.2, 0, 0.15);
       rUp.set(-2.2, 0, -0.15);
-      lLo = 0.1; rLo = 0.1;
-      lUpLeg = -0.7; rUpLeg = -0.7;
-      lLoLeg = 1.1; rLoLeg = 1.1;
+      lLo = 0.1;
+      rLo = 0.1;
+      lUpLeg = -0.7;
+      rUpLeg = -0.7;
+      lLoLeg = 1.1;
+      rLoLeg = 1.1;
       chestRotX = -0.1;
       neckX = -0.1;
     } else if (anim === "fall") {
       lUp.set(-0.5, 0, 1.2);
       rUp.set(-0.5, 0, -1.2);
-      lLo = 0.4; rLo = 0.4;
-      lUpLeg = 0.25; rUpLeg = 0.25;
-      lLoLeg = 0.2; rLoLeg = 0.2;
-      // Add roll on chest for a windswept feel
+      lLo = 0.4;
+      rLo = 0.4;
+      lUpLeg = 0.25;
+      rUpLeg = 0.25;
+      lLoLeg = 0.2;
+      rLoLeg = 0.2;
       chestRotX = 0.15;
       pelvisRotZ = Math.sin(t * 2) * 0.06;
       neckX = 0.2;
     } else if (anim === "hold") {
-      // Right arm forward, slightly bent (holding stance). Left relaxed.
       rUp.set(-1.45, 0, -0.15);
       rLo = 0.55;
       lUp.set(-0.15, 0, 0.18);
       lLo = 0.25;
-      // Subtle breathing
       pelvisY = Math.sin(t * 1.6) * 0.03;
       chestRotY = Math.sin(t * 1.3) * 0.02;
-      // If also moving, layer a leg gait
       if (horiz > 0.15) {
         const freq = anim === "hold" && horiz > (player.walkSpeed || 6) * 1.1 ? 11 : 7;
         const amp = horiz > (player.walkSpeed || 6) * 1.1 ? 1.0 : 0.55;
@@ -189,29 +219,22 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
 
       const phase = t * freq;
       const legSwing = Math.sin(phase) * legAmp * motion;
-      // Arms swing OPPOSITE to legs (contralateral gait)
       const armSwing = -Math.sin(phase) * armAmp * motion;
 
-      // Bobbing (lowest when both feet planted, peaks twice per cycle)
       pelvisY = Math.abs(Math.sin(phase)) * (isRun ? 0.14 : 0.07) * motion;
-      // Slight forward lean while running
       chestRotX = isRun ? -0.18 * motion : -0.05 * motion;
-      // Hip sway (counter-rotation between pelvis and chest)
       pelvisRotY = Math.sin(phase) * 0.12 * motion;
       chestRotY = -Math.sin(phase) * 0.18 * motion;
-      // Tiny side-to-side hip drop on the swing leg
       pelvisRotZ = Math.sin(phase) * 0.06 * motion;
       neckX = Math.sin(phase * 2) * 0.02;
 
       lUp.set(armSwing, 0, 0.05);
       rUp.set(-armSwing, 0, -0.05);
-      // Elbow flexes harder on the forward swing
       lLo = Math.max(0, -armSwing) * elbowBend + 0.12;
       rLo = Math.max(0, armSwing) * elbowBend + 0.12;
 
       lUpLeg = legSwing;
       rUpLeg = -legSwing;
-      // Knee bends most as the leg swings FORWARD (preparing to plant)
       lLoLeg = Math.max(0, -Math.sin(phase)) * kneeBend + 0.08;
       rLoLeg = Math.max(0, Math.sin(phase)) * kneeBend + 0.08;
     } else {
@@ -226,7 +249,6 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
       rLo = 0.1 + Math.sin(t * 1.1) * 0.03;
     }
 
-    // Smooth toward targets
     const s = smooth.current;
     s.pelvisY += (pelvisY - s.pelvisY) * k;
     s.pelvisRotY += (pelvisRotY - s.pelvisRotY) * k;
@@ -243,7 +265,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     s.lLoLeg += (lLoLeg - s.lLoLeg) * k;
     s.rLoLeg += (rLoLeg - s.rLoLeg) * k;
 
-    // Apply
+    // Apply rotations
     if (pelvisRef.current) {
       pelvisRef.current.position.y = s.pelvisY;
       pelvisRef.current.rotation.y = s.pelvisRotY;
@@ -264,11 +286,10 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
     if (rLoLegRef.current) rLoLegRef.current.rotation.x = s.rLoLeg;
   });
 
-  // --- Layout ---
+  // --- Layout with improved positioning for seamless connections ---
   const ragPos = player.ragdoll && runtime._ragdollPos ? runtime._ragdollPos : null;
   const up = new THREE.Vector3(player.up.x, player.up.y, player.up.z).normalize();
   const orientQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
-  // Lift rig so feet rest on player.position. Pelvis sits at hip height.
   const RIG_LIFT = 1.0;
 
   return (
@@ -283,75 +304,118 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
           />
         ) : (
           <group position={[0, RIG_LIFT, 0]}>
-            {/* PELVIS = root of the live rig (sits at hip height) */}
+            {/* PELVIS - root of rig with improved hip shape */}
             <group ref={pelvisRef}>
-              <mesh geometry={pelvisGeo} material={pantsMat} castShadow receiveShadow />
+              <mesh geometry={pelvisGeo} material={pantsMat} castShadow receiveShadow position={[0, 0, 0]} />
 
-              {/* CHEST/RIBCAGE pivots above pelvis (humanoid taper) */}
-              <group ref={chestRef} position={[0, 0.35, 0]}>
-                {/* Waist transition */}
-                <mesh geometry={waistGeo} material={shirtDarkMat} position={[0, -0.1, 0]} castShadow />
-                {/* Chest */}
-                <mesh geometry={chestGeo} material={shirtMat} position={[0, 0.27, 0]} castShadow receiveShadow />
+              {/* Belt accessory for visual connection */}
+              <mesh position={[0, -0.08, 0.05]} rotation={[0, 0, 0]}>
+                <torusGeometry args={[0.48, 0.045, 16, 48]} />
+                <meshStandardMaterial color={0x5a3e2b} metalness={0.3} roughness={0.6} />
+              </mesh>
 
-                {/* NECK + HEAD */}
-                <group ref={neckRef} position={[0, 0.6, 0]}>
-                  <mesh geometry={neckGeo} material={skinMat} position={[0, 0.05, 0]} castShadow />
-                  <mesh geometry={headGeo} material={skinMat} position={[0, 0.4, 0]} castShadow>
-                    <mesh position={[0.11, 0.05, 0.28]}>
-                      <sphereGeometry args={[0.045, 12, 12]} />
-                      <meshStandardMaterial color={0x111111} />
+              {/* CHEST with improved V-taper */}
+              <group ref={chestRef} position={[0, 0.38, 0]}>
+                {/* Waist transition piece for smooth connection */}
+                <mesh geometry={waistGeo} material={shirtDarkMat} position={[0, -0.12, 0]} castShadow />
+                {/* Chest piece */}
+                <mesh geometry={chestGeo} material={shirtMat} position={[0, 0.29, 0.02]} castShadow receiveShadow />
+
+                {/* Collar detail */}
+                <mesh position={[0, 0.58, 0.28]} rotation={[0.2, 0, 0]}>
+                  <boxGeometry args={[0.65, 0.08, 0.15]} />
+                  <meshStandardMaterial color={0xccaa88} roughness={0.4} />
+                </mesh>
+
+                {/* NECK with smoother transition */}
+                <group ref={neckRef} position={[0, 0.64, 0]}>
+                  <mesh geometry={neckGeo} material={skinMat} position={[0, 0.06, 0]} castShadow />
+
+                  {/* HEAD with detailed face */}
+                  <group position={[0, 0.44, 0]}>
+                    <mesh geometry={headGeo} material={skinMat} castShadow receiveShadow />
+
+                    {/* Eyes - whites */}
+                    <mesh position={[0.11, 0.05, 0.32]} material={eyeWhiteMat}>
+                      <sphereGeometry args={[0.045, 24, 24]} />
                     </mesh>
-                    <mesh position={[-0.11, 0.05, 0.28]}>
-                      <sphereGeometry args={[0.045, 12, 12]} />
-                      <meshStandardMaterial color={0x111111} />
+                    <mesh position={[-0.11, 0.05, 0.32]} material={eyeWhiteMat}>
+                      <sphereGeometry args={[0.045, 24, 24]} />
                     </mesh>
-                  </mesh>
+
+                    {/* Pupils */}
+                    <mesh position={[0.115, 0.045, 0.36]} material={eyePupilMat}>
+                      <sphereGeometry args={[0.025, 20, 20]} />
+                    </mesh>
+                    <mesh position={[-0.105, 0.045, 0.36]} material={eyePupilMat}>
+                      <sphereGeometry args={[0.025, 20, 20]} />
+                    </mesh>
+
+                    {/* Eyebrows */}
+                    <mesh position={[0.11, 0.115, 0.32]} material={eyebrowMat} rotation={[-0.1, 0, 0]}>
+                      <boxGeometry args={[0.12, 0.04, 0.06]} />
+                    </mesh>
+                    <mesh position={[-0.11, 0.115, 0.32]} material={eyebrowMat} rotation={[-0.1, 0, 0]}>
+                      <boxGeometry args={[0.12, 0.04, 0.06]} />
+                    </mesh>
+
+                    {/* Subtle mouth line */}
+                    <mesh position={[0, -0.05, 0.34]} rotation={[0.1, 0, 0]}>
+                      <boxGeometry args={[0.14, 0.02, 0.03]} />
+                      <meshStandardMaterial color={0xaa7766} roughness={0.3} />
+                    </mesh>
+
+                    {/* Simple nose hint */}
+                    <mesh position={[0, 0.02, 0.36]}>
+                      <sphereGeometry args={[0.028, 16, 16]} />
+                      <meshStandardMaterial color={0xe0b08a} roughness={0.3} />
+                    </mesh>
+                  </group>
                 </group>
 
-                {/* LEFT ARM: shoulder cap + tapered upper arm */}
-                <group ref={lUpArmRef} position={[-0.58, 0.42, 0]}>
-                  <mesh geometry={shoulderCapGeo} material={shirtMat} castShadow />
-                  <mesh geometry={upperArmGeo} material={shirtMat} position={[0, -0.3, 0]} castShadow />
-                  <group ref={lLoArmRef} position={[0, -0.58, 0]}>
-                    <mesh geometry={lowerArmGeo} material={skinMat} position={[0, -0.25, 0]} castShadow />
-                    <mesh geometry={handGeo} material={skinMat} position={[0, -0.58, 0]} castShadow />
+                {/* LEFT ARM - improved shoulder connection */}
+                <group ref={lUpArmRef} position={[-0.62, 0.44, 0]}>
+                  <mesh geometry={shoulderCapGeo} material={shirtMat} position={[0, 0, 0]} castShadow />
+                  <mesh geometry={upperArmGeo} material={shirtMat} position={[0, -0.28, 0]} castShadow />
+                  <group ref={lLoArmRef} position={[0, -0.54, 0]}>
+                    <mesh geometry={lowerArmGeo} material={skinMat} position={[0, -0.23, 0]} castShadow />
+                    <mesh geometry={handGeo} material={skinMat} position={[0, -0.52, 0.02]} castShadow />
                   </group>
                 </group>
 
                 {/* RIGHT ARM */}
-                <group ref={rUpArmRef} position={[0.58, 0.42, 0]}>
-                  <mesh geometry={shoulderCapGeo} material={shirtMat} castShadow />
-                  <mesh geometry={upperArmGeo} material={shirtMat} position={[0, -0.3, 0]} castShadow />
-                  <group ref={rLoArmRef} position={[0, -0.58, 0]}>
-                    <mesh geometry={lowerArmGeo} material={skinMat} position={[0, -0.25, 0]} castShadow />
-                    <mesh geometry={handGeo} material={skinMat} position={[0, -0.58, 0]} castShadow />
+                <group ref={rUpArmRef} position={[0.62, 0.44, 0]}>
+                  <mesh geometry={shoulderCapGeo} material={shirtMat} position={[0, 0, 0]} castShadow />
+                  <mesh geometry={upperArmGeo} material={shirtMat} position={[0, -0.28, 0]} castShadow />
+                  <group ref={rLoArmRef} position={[0, -0.54, 0]}>
+                    <mesh geometry={lowerArmGeo} material={skinMat} position={[0, -0.23, 0]} castShadow />
+                    <mesh geometry={handGeo} material={skinMat} position={[0, -0.52, 0.02]} castShadow />
                   </group>
                 </group>
               </group>
 
-              {/* LEFT LEG: hip pivot at bottom of pelvis */}
-              <group ref={lUpLegRef} position={[-0.22, -0.18, 0]}>
-                <mesh geometry={upperLegGeo} material={pantsMat} position={[0, -0.32, 0]} castShadow />
-                <group ref={lLoLegRef} position={[0, -0.62, 0]}>
-                  <mesh geometry={lowerLegGeo} material={pantsMat} position={[0, -0.28, 0]} castShadow />
-                  <mesh geometry={footGeo} material={shoeMat} position={[0, -0.6, 0.08]} castShadow />
+              {/* LEFT LEG with better hip joint connection */}
+              <group ref={lUpLegRef} position={[-0.25, -0.16, 0]}>
+                <mesh geometry={upperLegGeo} material={pantsMat} position={[0, -0.31, 0]} castShadow />
+                <group ref={lLoLegRef} position={[0, -0.61, 0]}>
+                  <mesh geometry={lowerLegGeo} material={pantsMat} position={[0, -0.27, 0]} castShadow />
+                  <mesh geometry={footGeo} material={shoeMat} position={[0, -0.58, 0.1]} castShadow />
                 </group>
               </group>
 
               {/* RIGHT LEG */}
-              <group ref={rUpLegRef} position={[0.22, -0.18, 0]}>
-                <mesh geometry={upperLegGeo} material={pantsMat} position={[0, -0.32, 0]} castShadow />
-                <group ref={rLoLegRef} position={[0, -0.62, 0]}>
-                  <mesh geometry={lowerLegGeo} material={pantsMat} position={[0, -0.28, 0]} castShadow />
-                  <mesh geometry={footGeo} material={shoeMat} position={[0, -0.6, 0.08]} castShadow />
+              <group ref={rUpLegRef} position={[0.25, -0.16, 0]}>
+                <mesh geometry={upperLegGeo} material={pantsMat} position={[0, -0.31, 0]} castShadow />
+                <group ref={rLoLegRef} position={[0, -0.61, 0]}>
+                  <mesh geometry={lowerLegGeo} material={pantsMat} position={[0, -0.27, 0]} castShadow />
+                  <mesh geometry={footGeo} material={shoeMat} position={[0, -0.58, 0.1]} castShadow />
                 </group>
               </group>
             </group>
           </group>
         )}
 
-        <Html position={[0, 2.4, 0]} center distanceFactor={8} zIndexRange={[100, 0]} sprite>
+        <Html position={[0, 2.45, 0]} center distanceFactor={8} zIndexRange={[100, 0]} sprite>
           <div className="px-2 py-0.5 rounded-md bg-black/70 text-white text-xs font-medium whitespace-nowrap pointer-events-none">
             {player.username}
           </div>
@@ -361,7 +425,7 @@ export default function Avatar({ player, runtime }: { player: RuntimePlayer; run
   );
 }
 
-// ---------- Ragdoll renderer ----------
+// ---------- Enhanced Ragdoll renderer ----------
 function RagdollRig({
   ragPos,
   geos,
@@ -380,25 +444,25 @@ function RagdollRig({
   return (
     <group>
       <mesh geometry={geos.pelvisGeo} material={mats.pantsMat} position={at("torso", [0, 0, 0])} castShadow />
-      <mesh geometry={geos.chestGeo} material={mats.shirtMat} position={at("torso", [0, 0.3, 0])} castShadow />
-      <mesh geometry={geos.neckGeo} material={mats.skinMat} position={at("neck", [0, 0.6, 0])} castShadow />
-      <mesh geometry={geos.headGeo} material={mats.skinMat} position={at("head", [0, 1.0, 0])} castShadow />
+      <mesh geometry={geos.chestGeo} material={mats.shirtMat} position={at("torso", [0, 0.32, 0])} castShadow />
+      <mesh geometry={geos.neckGeo} material={mats.skinMat} position={at("neck", [0, 0.62, 0])} castShadow />
+      <mesh geometry={geos.headGeo} material={mats.skinMat} position={at("head", [0, 1.02, 0])} castShadow />
 
-      <mesh geometry={geos.upperArmGeo} material={mats.shirtMat} position={at("leftUpperArm", [-0.55, 0.2, 0])} castShadow />
-      <mesh geometry={geos.lowerArmGeo} material={mats.skinMat} position={at("leftLowerArm", [-0.55, -0.3, 0])} castShadow />
-      <mesh geometry={geos.handGeo} material={mats.skinMat} position={at("leftHand", [-0.55, -0.7, 0])} castShadow />
+      <mesh geometry={geos.upperArmGeo} material={mats.shirtMat} position={at("leftUpperArm", [-0.6, 0.22, 0])} castShadow />
+      <mesh geometry={geos.lowerArmGeo} material={mats.skinMat} position={at("leftLowerArm", [-0.6, -0.28, 0])} castShadow />
+      <mesh geometry={geos.handGeo} material={mats.skinMat} position={at("leftHand", [-0.6, -0.68, 0])} castShadow />
 
-      <mesh geometry={geos.upperArmGeo} material={mats.shirtMat} position={at("rightUpperArm", [0.55, 0.2, 0])} castShadow />
-      <mesh geometry={geos.lowerArmGeo} material={mats.skinMat} position={at("rightLowerArm", [0.55, -0.3, 0])} castShadow />
-      <mesh geometry={geos.handGeo} material={mats.skinMat} position={at("rightHand", [0.55, -0.7, 0])} castShadow />
+      <mesh geometry={geos.upperArmGeo} material={mats.shirtMat} position={at("rightUpperArm", [0.6, 0.22, 0])} castShadow />
+      <mesh geometry={geos.lowerArmGeo} material={mats.skinMat} position={at("rightLowerArm", [0.6, -0.28, 0])} castShadow />
+      <mesh geometry={geos.handGeo} material={mats.skinMat} position={at("rightHand", [0.6, -0.68, 0])} castShadow />
 
-      <mesh geometry={geos.upperLegGeo} material={mats.pantsMat} position={at("leftUpperLeg", [-0.22, -0.85, 0])} castShadow />
-      <mesh geometry={geos.lowerLegGeo} material={mats.pantsMat} position={at("leftLowerLeg", [-0.22, -1.4, 0])} castShadow />
-      <mesh geometry={geos.footGeo} material={mats.shoeMat} position={at("leftFoot", [-0.22, -1.75, 0.05])} castShadow />
+      <mesh geometry={geos.upperLegGeo} material={mats.pantsMat} position={at("leftUpperLeg", [-0.25, -0.82, 0])} castShadow />
+      <mesh geometry={geos.lowerLegGeo} material={mats.pantsMat} position={at("leftLowerLeg", [-0.25, -1.38, 0])} castShadow />
+      <mesh geometry={geos.footGeo} material={mats.shoeMat} position={at("leftFoot", [-0.25, -1.72, 0.08])} castShadow />
 
-      <mesh geometry={geos.upperLegGeo} material={mats.pantsMat} position={at("rightUpperLeg", [0.22, -0.85, 0])} castShadow />
-      <mesh geometry={geos.lowerLegGeo} material={mats.pantsMat} position={at("rightLowerLeg", [0.22, -1.4, 0])} castShadow />
-      <mesh geometry={geos.footGeo} material={mats.shoeMat} position={at("rightFoot", [0.22, -1.75, 0.05])} castShadow />
+      <mesh geometry={geos.upperLegGeo} material={mats.pantsMat} position={at("rightUpperLeg", [0.25, -0.82, 0])} castShadow />
+      <mesh geometry={geos.lowerLegGeo} material={mats.pantsMat} position={at("rightLowerLeg", [0.25, -1.38, 0])} castShadow />
+      <mesh geometry={geos.footGeo} material={mats.shoeMat} position={at("rightFoot", [0.25, -1.72, 0.08])} castShadow />
     </group>
   );
 }
